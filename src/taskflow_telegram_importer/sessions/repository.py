@@ -150,6 +150,7 @@ def _encode_session(session: ImportSession) -> dict[str, Any]:
             if session.editorial_hint
             else None
         ),
+        "metadata_confirmed": session.metadata_confirmed,
         "published_paths": [str(path) for path in session.published_paths],
     }
 
@@ -184,5 +185,6 @@ def _decode_session(raw: dict[str, Any]) -> ImportSession:
         captions=tuple(str(value) for value in raw["captions"]),
         descriptor_message_ids=tuple(int(value) for value in raw["descriptor_message_ids"]),
         editorial_hint=hint,
+        metadata_confirmed=bool(raw.get("metadata_confirmed", False)),
         published_paths=tuple(Path(value) for value in raw["published_paths"]),
     )

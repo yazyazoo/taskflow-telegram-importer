@@ -50,4 +50,5 @@ class ImportSession:
     captions: tuple[str, ...] = ()
     descriptor_message_ids: tuple[int, ...] = ()
     editorial_hint: EditorialHint | None = None
+    metadata_confirmed: bool = False
     published_paths: tuple[Path, ...] = ()
