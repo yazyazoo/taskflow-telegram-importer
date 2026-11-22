@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 from dataclasses import replace
 from typing import Awaitable, Callable
 
@@ -31,6 +32,7 @@ class DownloadCoordinator:
         self._blocking_runner = blocking_runner
         self._tasks: dict[tuple[str, int], asyncio.Task[None]] = {}
         self._locks: dict[str, asyncio.Lock] = {}
+        self._terminal_callback = None
 
     @property
     def active_keys(self) -> frozenset[tuple[str, int]]:
@@ -47,6 +49,9 @@ class DownloadCoordinator:
         )
         self._tasks[key] = task
         task.add_done_callback(lambda completed, key=key: self._discard(key, completed))
+
+    def set_terminal_callback(self, callback) -> None:
+        self._terminal_callback = callback
 
     def retry(self, session_id: str, message_id: int) -> None:
         session = self._repository.load(session_id)
@@ -140,6 +145,7 @@ class DownloadCoordinator:
                 staging_path=staged_path,
                 error=None,
             )
+            await self._notify_terminal(session_id)
         except asyncio.CancelledError:
             try:
                 await self._transition(
@@ -160,6 +166,7 @@ class DownloadCoordinator:
                 staging_path=None,
                 error=f"{type(exc).__name__}: {exc}",
             )
+            await self._notify_terminal(session_id)
 
     async def _transition(
         self,
@@ -181,6 +188,13 @@ class DownloadCoordinator:
 
     def _lock(self, session_id: str) -> asyncio.Lock:
         return self._locks.setdefault(session_id, asyncio.Lock())
+
+    async def _notify_terminal(self, session_id: str) -> None:
+        if self._terminal_callback is None:
+            return
+        result = self._terminal_callback(session_id)
+        if inspect.isawaitable(result):
+            await result
 
     def _discard(
         self, key: tuple[str, int], completed: asyncio.Task[None]

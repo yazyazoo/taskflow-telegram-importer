@@ -7,5 +7,12 @@ mantiene sessioni persistenti e pubblica nella gate dell'integrazione
 filesystem soltanto file completi. Non chiama le API TaskFlow e non crea
 workflow.
 
-Stato: progettazione e pianificazione dell'implementazione.
+La prima implementazione include autorizzazione privata, sessioni persistenti,
+download concorrenti, recovery, pubblicazione atomica e azioni operatore.
+La validazione finale con Bot API locale e file Telegram reali sulla seedbox è
+ancora necessaria.
+
+- [Configurazione](configurazione.md)
+- [Deployment](deployment.md)
+- [Operazioni](operazioni.md)
 
