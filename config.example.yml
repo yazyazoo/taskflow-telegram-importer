@@ -1,0 +1,27 @@
+telegram:
+  api_base_url: "http://127.0.0.1:8081/bot"
+  local_mode: true
+  long_poll_request_timeout_seconds: 30
+  allowed_user_ids: []
+  token_command:
+    executable: "/mnt/shared/Personal/bin/rp-secret"
+    alias: "taskflow_telegram_importer"
+    field: "token"
+
+paths:
+  staging: "/mnt/shared/DOWNLOADS/TaskFlow/telegram_staging"
+  gate: "/mnt/shared/DOWNLOADS/TaskFlow/gate_local_media"
+  log_file: "/mnt/shared/customprograms/taskflow-telegram-importer/logs/importer.log"
+
+files:
+  allowed_extensions:
+    - ".mkv"
+    - ".mp4"
+    - ".avi"
+    - ".mov"
+    - ".m4v"
+  minimum_free_gib: 400
+
+logging:
+  level: "INFO"
+
