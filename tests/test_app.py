@@ -55,14 +55,17 @@ class FakePublisher:
 
 
 class FakeCoordinator:
-    def __init__(self, events):
+    def __init__(self, events, *, fail_shutdown=False):
         self.events = events
+        self.fail_shutdown = fail_shutdown
 
     def recover(self):
         self.events.append("recover")
 
     async def shutdown(self):
         self.events.append("coordinator-shutdown")
+        if self.fail_shutdown:
+            raise RuntimeError("coordinator shutdown failed")
 
 
 @pytest.mark.asyncio
@@ -101,6 +104,26 @@ async def test_unavailable_bot_api_fails_startup() -> None:
 
 
 @pytest.mark.asyncio
+async def test_failed_startup_is_cleaned_up_by_runtime_lifecycle() -> None:
+    events = []
+    runtime = Runtime(
+        FakeApplication(events, fail_polling=True),
+        FakeCoordinator(events),
+        FakePublisher(events),
+        long_poll_timeout=30,
+    )
+
+    with pytest.raises(ConnectionError):
+        await runtime.run_until_stopped(asyncio.Event())
+
+    assert events[-3:] == [
+        "coordinator-shutdown",
+        "application-stop",
+        "application-shutdown",
+    ]
+
+
+@pytest.mark.asyncio
 async def test_invalid_filesystem_stops_before_application_initialization() -> None:
     events = []
     runtime = Runtime(
@@ -126,6 +149,8 @@ async def test_shutdown_stops_updates_before_work_and_application() -> None:
         long_poll_timeout=30,
     )
 
+    await runtime.start()
+    events.clear()
     await runtime.shutdown()
 
     assert events == [
@@ -157,6 +182,23 @@ async def test_run_until_stopped_performs_signal_style_shutdown() -> None:
         "application-stop",
         "application-shutdown",
     ]
+
+
+@pytest.mark.asyncio
+async def test_application_is_closed_even_if_coordinator_shutdown_fails() -> None:
+    events = []
+    runtime = Runtime(
+        FakeApplication(events),
+        FakeCoordinator(events, fail_shutdown=True),
+        FakePublisher(events),
+        long_poll_timeout=30,
+    )
+    await runtime.start()
+
+    with pytest.raises(RuntimeError, match="coordinator shutdown"):
+        await runtime.shutdown()
+
+    assert events[-2:] == ["application-stop", "application-shutdown"]
 
 
 def test_secret_filter_redacts_all_configured_values() -> None:

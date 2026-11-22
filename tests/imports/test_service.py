@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 from pathlib import Path
+import logging
 
 import pytest
 
@@ -82,6 +83,15 @@ def test_received_files_share_one_collecting_session_and_start_immediately(
     assert coordinator.started == [(first.session_id, 1), (first.session_id, 2)]
 
 
+def test_session_milestones_are_logged(tmp_path: Path, caplog) -> None:
+    service, _, _, _ = _service(tmp_path)
+    caplog.set_level(logging.INFO, logger="taskflow_telegram_importer.imports")
+
+    _receive(service, 1)
+
+    assert "received video session=session-one message=1" in caplog.text
+
+
 def test_finish_is_explicit_and_opens_next_collection_while_downloads_continue(
     tmp_path: Path,
 ) -> None:
@@ -95,6 +105,20 @@ def test_finish_is_explicit_and_opens_next_collection_while_downloads_continue(
     assert sealed.editorial_hint.title == "Cape Fear"
     assert next_session.session_id != first.session_id
     assert repository.load(first.session_id).state is SessionState.SEALED
+
+
+def test_duplicate_update_from_sealed_session_is_not_added_or_downloaded_again(
+    tmp_path: Path,
+) -> None:
+    service, repository, _, coordinator = _service(tmp_path)
+    first = _receive(service, 1)
+    service.finish_collection(10)
+
+    duplicate = _receive(service, 1)
+
+    assert duplicate.session_id == first.session_id
+    assert len(repository.list_all()) == 1
+    assert coordinator.started == [(first.session_id, 1)]
 
 
 def test_edit_then_confirm_metadata_does_not_publish_incomplete_files(
@@ -130,6 +154,46 @@ def test_reconcile_publishes_after_every_file_is_complete(tmp_path: Path) -> Non
     assert published.state is SessionState.PUBLISHED
     assert published.published_paths == (publisher.gate / "episode-1.mkv",)
     assert published.published_paths[0].read_bytes() == b"video"
+
+
+def test_reconcile_recovers_commit_lost_after_atomic_rename(tmp_path: Path) -> None:
+    service, repository, publisher, _ = _service(tmp_path)
+    snapshot = _receive(service)
+    service.finish_collection(10)
+    service.confirm_metadata(snapshot.session_id, 10)
+    staged = publisher.staging / snapshot.session_id / "episode-1.mkv"
+    staged.parent.mkdir(parents=True, exist_ok=True)
+    staged.write_bytes(b"video")
+    session = repository.load(snapshot.session_id)
+    complete = replace(session.files[0], state=FileState.COMPLETE, staging_path=staged)
+    publishing = replace(
+        session,
+        state=SessionState.PUBLISHING,
+        files=(complete,),
+        published_paths=(publisher.gate / "episode-1.mkv",),
+    )
+    repository.save(publishing)
+    publisher.publish(publishing)
+
+    recovered = service.reconcile(snapshot.session_id)
+
+    assert recovered.state is SessionState.PUBLISHED
+    assert recovered.published_paths[0].read_bytes() == b"video"
+
+
+@pytest.mark.asyncio
+async def test_terminal_change_notifies_registered_listener(tmp_path: Path) -> None:
+    service, _, _, _ = _service(tmp_path)
+    snapshot = _receive(service)
+    seen = []
+
+    async def listener(session):
+        seen.append(session.session_id)
+
+    service.add_listener(listener)
+    await service.file_terminal(snapshot.session_id)
+
+    assert seen == [snapshot.session_id]
 
 
 @pytest.mark.asyncio

@@ -22,6 +22,7 @@ from taskflow_telegram_importer.telegram import TelegramHandlers, build_applicat
 class ServiceStub:
     def __init__(self) -> None:
         self.calls = []
+        self.listeners = []
         self.session = ImportSession("abc123", 20, 10, SessionState.COLLECTING)
 
     def receive_descriptor(self, *args):
@@ -70,6 +71,9 @@ class ServiceStub:
             raise ImporterError("session belongs to another operator")
         return self.session
 
+    def add_listener(self, listener):
+        self.listeners.append(listener)
+
 
 class FakeMessage:
     def __init__(self, *, message_id=1, caption=None, text=None, photo=None, document=None, video=None):
@@ -94,6 +98,20 @@ class FakeBot:
         self.edits.append(kwargs)
 
 
+class FakeQuery:
+    def __init__(self, data, message):
+        self.data = data
+        self.message = message
+        self.answers = 0
+        self.edits = []
+
+    async def answer(self):
+        self.answers += 1
+
+    async def edit_message_text(self, text):
+        self.edits.append(text)
+
+
 def _update(message, *, user_id=10, chat_type="private"):
     return SimpleNamespace(
         effective_user=SimpleNamespace(id=user_id),
@@ -101,6 +119,14 @@ def _update(message, *, user_id=10, chat_type="private"):
         effective_message=message,
         callback_query=None,
     )
+
+
+def _callback(data, *, user_id=10):
+    message = FakeMessage()
+    query = FakeQuery(data, message)
+    update = _update(message, user_id=user_id)
+    update.callback_query = query
+    return update, query
 
 
 def _file(**overrides):
@@ -180,6 +206,55 @@ async def test_reuses_one_status_message_for_following_updates() -> None:
     assert len(first.replies) == 1
     assert len(bot.edits) == 1
     assert bot.edits[0]["message_id"] == 900
+
+
+@pytest.mark.asyncio
+async def test_background_session_event_edits_existing_status() -> None:
+    service = ServiceStub()
+    handlers = TelegramHandlers(service, (10,), (".mkv",))
+    bot = FakeBot()
+    await handlers.handle_message(
+        _update(FakeMessage(document=_file())), SimpleNamespace(bot=bot)
+    )
+
+    await service.listeners[0](service.session)
+
+    assert bot.edits[-1]["message_id"] == 900
+    assert "Completati" in bot.edits[-1]["text"]
+
+
+@pytest.mark.asyncio
+async def test_delete_requires_two_callbacks_and_enforces_owner() -> None:
+    service = ServiceStub()
+    handlers = TelegramHandlers(service, (10, 11), (".mkv",))
+    context = SimpleNamespace(bot=FakeBot())
+    request_update, _ = _callback("delete-request:abc123")
+
+    await handlers.handle_callback(request_update, context)
+    assert not any(call[0] == "delete" for call in service.calls)
+
+    confirm_update, confirm_query = _callback("delete-confirm:abc123")
+    await handlers.handle_callback(confirm_update, context)
+    assert ("delete", "abc123", 10) in service.calls
+    assert confirm_query.edits == ["Sessione eliminata."]
+
+    other_update, other_query = _callback("confirm:abc123", user_id=11)
+    await handlers.handle_callback(other_update, context)
+    assert other_query.message.replies
+    assert not any(call[0] == "confirm" and call[-1] == 11 for call in service.calls)
+
+
+@pytest.mark.asyncio
+async def test_stale_finish_button_does_not_finish_another_session() -> None:
+    service = ServiceStub()
+    service.session = replace(service.session, state=SessionState.SEALED)
+    handlers = TelegramHandlers(service, (10,), (".mkv",))
+    update, query = _callback("finish:abc123")
+
+    await handlers.handle_callback(update, SimpleNamespace(bot=FakeBot()))
+
+    assert not any(call[0] == "finish" for call in service.calls)
+    assert query.message.replies
 
 
 def test_build_application_uses_local_bot_api_and_sequential_updates(tmp_path: Path) -> None:

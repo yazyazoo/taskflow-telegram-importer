@@ -16,6 +16,7 @@ from telegram.ext import (
 from taskflow_telegram_importer.config import Settings, resolve_secret
 from taskflow_telegram_importer.errors import ImporterError
 from taskflow_telegram_importer.imports import ImportService
+from taskflow_telegram_importer.sessions import SessionState
 
 from .rendering import RenderedStatus, render_session
 
@@ -31,12 +32,16 @@ class TelegramHandlers:
         self._allowed_users = frozenset(allowed_user_ids)
         self._extensions = frozenset(value.lower() for value in allowed_extensions)
         self._status_messages: dict[int, tuple[int, int]] = {}
+        self._bots = {}
         self._editing: dict[int, str] = {}
+        if hasattr(service, "add_listener"):
+            service.add_listener(self.session_changed)
 
     async def handle_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if not self._authorized(update):
             return
         user_id = update.effective_user.id
+        self._bots[user_id] = context.bot
         chat_id = update.effective_chat.id
         message = update.effective_message
 
@@ -75,15 +80,20 @@ class TelegramHandlers:
         if not self._authorized(update) or update.callback_query is None:
             return
         query = update.callback_query
+        self._bots[update.effective_user.id] = context.bot
         await query.answer()
         data = query.data or ""
         user_id = update.effective_user.id
         try:
-            if data == "finish":
+            action, session_id, *tail = data.split(":")
+            selected = self._service.get(session_id, user_id)
+            if action == "finish":
+                if selected.state is not SessionState.COLLECTING:
+                    raise ImporterError("stale finish action")
                 session = self._service.finish_collection(user_id)
+                if session.session_id != session_id:
+                    raise ImporterError("stale finish action")
             else:
-                action, session_id, *tail = data.split(":")
-                self._service.get(session_id, user_id)
                 if action == "confirm":
                     session = self._service.confirm_metadata(session_id, user_id)
                 elif action == "edit":
@@ -113,6 +123,19 @@ class TelegramHandlers:
             await self._show_status(update, context, session)
         except (ImporterError, ValueError) as exc:
             await query.message.reply_text(str(exc))
+
+    async def session_changed(self, session) -> None:
+        current = self._status_messages.get(session.user_id)
+        bot = self._bots.get(session.user_id)
+        if current is None or bot is None:
+            return
+        rendered = render_session(session)
+        await bot.edit_message_text(
+            chat_id=current[0],
+            message_id=current[1],
+            text=rendered.text,
+            reply_markup=_markup(rendered),
+        )
 
     async def _handle_metadata_text(self, user_id, text, update, context) -> None:
         try:

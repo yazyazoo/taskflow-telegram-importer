@@ -91,9 +91,12 @@ def load_settings(project_root: Path) -> Settings:
     logging_raw = _mapping(root["logging"], "logging")
     _require_exact_keys(logging_raw, _LOGGING_KEYS, "logging")
 
+    local_mode = _boolean(telegram_raw["local_mode"], "local_mode")
+    if not local_mode:
+        raise ConfigError("local_mode must be true for local filesystem downloads")
     telegram = TelegramSettings(
         api_base_url=_nonempty_string(telegram_raw["api_base_url"], "api_base_url"),
-        local_mode=_boolean(telegram_raw["local_mode"], "local_mode"),
+        local_mode=local_mode,
         long_poll_request_timeout_seconds=_positive_number(
             telegram_raw["long_poll_request_timeout_seconds"], "timeout"
         ),

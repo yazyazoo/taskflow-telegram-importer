@@ -189,6 +189,44 @@ async def test_cancel_waits_for_jobs_then_removes_session(tmp_path: Path) -> Non
 
 
 @pytest.mark.asyncio
+async def test_cancel_waits_for_blocking_copy_and_removes_late_file(tmp_path: Path) -> None:
+    repository = SessionRepository(tmp_path / "manifests")
+    publisher = FilesystemPublisher(tmp_path / "staging", tmp_path / "gate", 0)
+    source_path = tmp_path / "source.mkv"
+    source_path.write_bytes(b"content")
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    class Source:
+        async def get_local_file(self, file_id):
+            return source_path
+
+    async def blocked_runner(function, *args):
+        entered.set()
+        await release.wait()
+        return function(*args)
+
+    item = _file(1)
+    repository.create(_session("one", (item,)))
+    coordinator = DownloadCoordinator(
+        repository, publisher, Source(), blocking_runner=blocked_runner
+    )
+    coordinator.start("one", item)
+    await asyncio.wait_for(entered.wait(), 1)
+
+    cancellation = asyncio.create_task(coordinator.cancel_session("one"))
+    try:
+        await asyncio.sleep(0.05)
+        assert not cancellation.done()
+    finally:
+        release.set()
+    await asyncio.wait_for(cancellation, 3)
+
+    assert repository.list_all() == ()
+    assert not (publisher.staging / "one" / item.filename).exists()
+
+
+@pytest.mark.asyncio
 async def test_recovery_restarts_only_incomplete_unpublished_files(tmp_path: Path) -> None:
     repository, _, source, coordinator = _setup(tmp_path)
     complete_path = tmp_path / "already.mkv"

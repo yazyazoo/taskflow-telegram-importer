@@ -125,6 +125,7 @@ def test_load_settings_rejects_gate_parent_of_staging(tmp_path: Path) -> None:
         ("telegram", "allowed_user_ids", ["123"], "user ID"),
         ("telegram", "long_poll_request_timeout_seconds", 0, "timeout"),
         ("telegram", "long_poll_request_timeout_seconds", -5, "timeout"),
+        ("telegram", "local_mode", False, "local_mode"),
         ("logging", "level", "TRACE", "logging level"),
     ],
 )

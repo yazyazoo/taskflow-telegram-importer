@@ -4,6 +4,7 @@ import os
 import re
 import shutil
 import stat
+import logging
 from pathlib import Path
 
 from taskflow_telegram_importer.errors import ImporterError
@@ -14,6 +15,7 @@ from .names import normalize_session_directory
 
 _SESSION_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")
 _GIB = 1024**3
+_LOGGER = logging.getLogger("taskflow_telegram_importer.publisher")
 
 
 class FilesystemPublisher:
@@ -23,8 +25,12 @@ class FilesystemPublisher:
         self.minimum_free_bytes = int(minimum_free_gib * _GIB)
 
     def preflight(self) -> None:
+        _ensure_directory_path_safe(self.staging)
+        _ensure_directory_path_safe(self.gate)
         self.staging.mkdir(parents=True, exist_ok=True)
         self.gate.mkdir(parents=True, exist_ok=True)
+        _ensure_directory_path_safe(self.staging)
+        _ensure_directory_path_safe(self.gate)
         if _device_id(self.staging) != _device_id(self.gate):
             raise ImporterError("staging and gate must use the same filesystem")
 
@@ -52,7 +58,10 @@ class FilesystemPublisher:
 
         session_directory = self.staging / session_id
         _require_contained(session_directory, self.staging)
+        if session_directory.is_symlink():
+            raise ImporterError("session staging directory is a symlink")
         session_directory.mkdir(mode=0o700, parents=False, exist_ok=True)
+        _ensure_directory_path_safe(session_directory)
         target = session_directory / filename
         temporary = session_directory / f".{filename}.part"
         _require_contained(target, self.staging)
@@ -64,27 +73,50 @@ class FilesystemPublisher:
         if hasattr(os, "O_NOFOLLOW"):
             source_flags |= os.O_NOFOLLOW
             target_flags |= os.O_NOFOLLOW
+        directory_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+        if hasattr(os, "O_NOFOLLOW"):
+            directory_flags |= os.O_NOFOLLOW
+        directory_fd = os.open(session_directory, directory_flags)
         try:
             source_fd = os.open(source, source_flags)
-            target_fd = os.open(temporary, target_flags, 0o600)
+            target_fd = os.open(temporary.name, target_flags, 0o600, dir_fd=directory_fd)
             with os.fdopen(source_fd, "rb") as source_handle, os.fdopen(
                 target_fd, "wb"
             ) as target_handle:
                 shutil.copyfileobj(source_handle, target_handle, length=1024 * 1024)
                 target_handle.flush()
                 os.fsync(target_handle.fileno())
-            if temporary.stat().st_size != expected_size:
+            if os.stat(temporary.name, dir_fd=directory_fd, follow_symlinks=False).st_size != expected_size:
                 raise ImporterError("staged file size does not match expected size")
-            os.rename(temporary, target)
+            os.rename(
+                temporary.name,
+                target.name,
+                src_dir_fd=directory_fd,
+                dst_dir_fd=directory_fd,
+            )
             _fsync_directory(session_directory)
+            _LOGGER.info("staged file session=%s file=%s bytes=%d", session_id, filename, expected_size)
             return target
         except Exception:
             temporary.unlink(missing_ok=True)
             raise
+        finally:
+            os.close(directory_fd)
+
+    def plan_publication(self, session: ImportSession) -> tuple[Path, ...]:
+        files = tuple(item for item in session.files if item.state is not FileState.EXCLUDED)
+        if len(files) == 1:
+            return (self.gate / files[0].filename,)
+        if session.editorial_hint is None:
+            raise ImporterError("session has no title and year")
+        target_directory = self.gate / normalize_session_directory(
+            session.editorial_hint.title, session.editorial_hint.year
+        )
+        return tuple(target_directory / item.filename for item in files)
 
     def publish(self, session: ImportSession) -> tuple[Path, ...]:
         self.preflight()
-        if session.state is not SessionState.SEALED or session.editorial_hint is None:
+        if session.state not in {SessionState.SEALED, SessionState.PUBLISHING} or session.editorial_hint is None:
             raise ImporterError("session is not confirmed for publication")
         files = tuple(item for item in session.files if item.state is not FileState.EXCLUDED)
         if not files or any(
@@ -94,6 +126,21 @@ class FilesystemPublisher:
 
         session_directory = self.staging / session.session_id
         _require_contained(session_directory, self.staging)
+        planned = self.plan_publication(session)
+        if session.state is SessionState.PUBLISHING and session.published_paths != planned:
+            raise ImporterError("persisted publication plan does not match session")
+        if _publication_is_complete(planned, files) and all(
+            item.staging_path is not None and not item.staging_path.exists()
+            for item in files
+        ):
+            if session_directory.exists():
+                try:
+                    session_directory.rmdir()
+                except OSError as exc:
+                    raise ImporterError(
+                        "completed publication left unexpected staging files"
+                    ) from exc
+            return planned
         for item in files:
             assert item.staging_path is not None
             _require_contained(item.staging_path, session_directory)
@@ -104,18 +151,19 @@ class FilesystemPublisher:
 
         if len(files) == 1:
             item = files[0]
-            target = self.gate / item.filename
+            target = planned[0]
             _require_contained(target, self.gate)
             _ensure_absent(target)
             os.rename(item.staging_path, target)
             session_directory.rmdir()
             _fsync_directory(self.gate)
+            _LOGGER.info("published session=%s files=1", session.session_id)
             return (target,)
 
         directory_name = normalize_session_directory(
             session.editorial_hint.title, session.editorial_hint.year
         )
-        target_directory = self.gate / directory_name
+        target_directory = planned[0].parent
         _require_contained(target_directory, self.gate)
         _ensure_absent(target_directory)
         actual_names = {path.name for path in session_directory.iterdir()}
@@ -124,7 +172,18 @@ class FilesystemPublisher:
             raise ImporterError("session staging directory contains unexpected files")
         os.rename(session_directory, target_directory)
         _fsync_directory(self.gate)
-        return tuple(target_directory / item.filename for item in files)
+        _LOGGER.info("published session=%s files=%d", session.session_id, len(files))
+        return planned
+
+    def discard_staged(self, session_id: str, path: Path) -> None:
+        expected_parent = self.staging / session_id
+        _require_contained(path, expected_parent)
+        _reject_symlink_parent(path, self.staging)
+        path.unlink(missing_ok=True)
+        try:
+            expected_parent.rmdir()
+        except OSError:
+            pass
 
     def delete_owned_paths(self, session: ImportSession) -> None:
         candidates = [
@@ -186,6 +245,25 @@ def _reject_symlink_parent(path: Path, root: Path) -> None:
         if current.is_symlink():
             raise ImporterError(f"path parent is a symlink: {current}")
         current = current.parent
+
+
+def _ensure_directory_path_safe(path: Path) -> None:
+    absolute = Path(os.path.abspath(path))
+    chain = tuple(reversed(absolute.parents)) + (absolute,)
+    for component in chain:
+        if component.is_symlink():
+            raise ImporterError(f"directory path contains a symlink: {component}")
+    if absolute.exists() and not absolute.is_dir():
+        raise ImporterError(f"directory path is not a directory: {absolute}")
+
+
+def _publication_is_complete(planned, files) -> bool:
+    if len(planned) != len(files):
+        return False
+    for target, item in zip(planned, files, strict=True):
+        if target.is_symlink() or not target.is_file() or target.stat().st_size != item.expected_size:
+            return False
+    return True
 
 
 def _device_id(path: Path) -> int:

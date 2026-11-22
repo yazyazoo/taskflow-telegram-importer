@@ -39,7 +39,7 @@ def render_session(
             ]
         )
     elif session.state is SessionState.COLLECTING:
-        buttons.append((f"Ho finito di inoltrare · {len(session.files)} file", "finish"))
+        buttons.append((f"Ho finito di inoltrare · {len(session.files)} file", f"finish:{session.session_id}"))
         buttons.append(("Elimina intera sessione", f"delete-request:{session.session_id}"))
     elif session.state is SessionState.SEALED:
         buttons.extend(

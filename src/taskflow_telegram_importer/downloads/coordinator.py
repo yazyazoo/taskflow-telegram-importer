@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import logging
 from dataclasses import replace
 from typing import Awaitable, Callable
 
@@ -16,6 +17,8 @@ from taskflow_telegram_importer.sessions import (
 )
 
 from .source import TelegramFileSource
+
+_LOGGER = logging.getLogger("taskflow_telegram_importer.downloads")
 
 
 class DownloadCoordinator:
@@ -60,6 +63,7 @@ class DownloadCoordinator:
             raise ImporterError("only failed files can be retried")
         reset = replace(file, state=FileState.RECEIVED, error=None, staging_path=None)
         self._repository.save(_replace_file(session, reset))
+        _LOGGER.info("retry requested session=%s message=%d", session_id, message_id)
         self.start(session_id, reset)
 
     async def exclude(self, session_id: str, message_id: int) -> None:
@@ -77,6 +81,7 @@ class DownloadCoordinator:
                 self._publisher.delete_owned_paths(replace(session, files=(file,), published_paths=()))
             excluded = replace(file, state=FileState.EXCLUDED, staging_path=None, error=None)
             self._repository.save(_replace_file(session, excluded))
+            _LOGGER.info("file excluded session=%s message=%d", session_id, message_id)
 
     async def cancel_session(self, session_id: str) -> None:
         tasks = [
@@ -97,14 +102,19 @@ class DownloadCoordinator:
         except OSError:
             pass
         self._repository.delete_manifest(session_id)
+        _LOGGER.info("session deleted session=%s", session_id)
 
     def recover(self) -> None:
+        recovered = 0
         for session in self._repository.list_all():
             if session.state is SessionState.PUBLISHED:
                 continue
             for file in session.files:
                 if file.state in {FileState.RECEIVED, FileState.DOWNLOADING}:
                     self.start(session.session_id, file)
+                    recovered += 1
+        if recovered:
+            _LOGGER.warning("recovered incomplete downloads count=%d", recovered)
 
     async def wait_idle(self, session_id: str | None = None) -> None:
         while True:
@@ -128,16 +138,21 @@ class DownloadCoordinator:
             await asyncio.gather(*tasks, return_exceptions=True)
 
     async def _download(self, session_id: str, message_id: int) -> None:
+        blocking_task = None
+        staged_path = None
         try:
             file = await self._transition(session_id, message_id, FileState.DOWNLOADING)
             source_path = await self._source.get_local_file(file.file_id)
-            staged_path = await self._blocking_runner(
-                self._publisher.prepare_file,
-                session_id,
-                file.filename,
-                source_path,
-                file.expected_size,
+            blocking_task = asyncio.create_task(
+                self._blocking_runner(
+                    self._publisher.prepare_file,
+                    session_id,
+                    file.filename,
+                    source_path,
+                    file.expected_size,
+                )
             )
+            staged_path = await asyncio.shield(blocking_task)
             await self._transition(
                 session_id,
                 message_id,
@@ -146,7 +161,15 @@ class DownloadCoordinator:
                 error=None,
             )
             await self._notify_terminal(session_id)
+            _LOGGER.info("download complete session=%s message=%d", session_id, message_id)
         except asyncio.CancelledError:
+            if blocking_task is not None:
+                try:
+                    staged_path = await blocking_task
+                except Exception:
+                    staged_path = None
+            if staged_path is not None:
+                self._publisher.discard_staged(session_id, staged_path)
             try:
                 await self._transition(
                     session_id,
@@ -159,6 +182,12 @@ class DownloadCoordinator:
                 pass
             raise
         except Exception as exc:
+            _LOGGER.error(
+                "download failed session=%s message=%d component=%s",
+                session_id,
+                message_id,
+                type(exc).__name__,
+            )
             await self._transition(
                 session_id,
                 message_id,
@@ -192,9 +221,16 @@ class DownloadCoordinator:
     async def _notify_terminal(self, session_id: str) -> None:
         if self._terminal_callback is None:
             return
-        result = self._terminal_callback(session_id)
-        if inspect.isawaitable(result):
-            await result
+        try:
+            result = self._terminal_callback(session_id)
+            if inspect.isawaitable(result):
+                await result
+        except Exception as exc:
+            _LOGGER.error(
+                "terminal reconciliation failed session=%s component=%s",
+                session_id,
+                type(exc).__name__,
+            )
 
     def _discard(
         self, key: tuple[str, int], completed: asyncio.Task[None]

@@ -30,7 +30,7 @@ def test_collecting_status_shows_concurrent_counts_and_finish_action() -> None:
     assert "File: 2" in rendered.text
     assert "Completati: 1" in rendered.text
     assert "Falliti: 1" in rendered.text
-    assert ("Ho finito di inoltrare · 2 file", "finish") in rendered.buttons
+    assert ("Ho finito di inoltrare · 2 file", "finish:abc123") in rendered.buttons
     assert ("Riprova two.mkv", "retry:abc123:2") in rendered.buttons
     assert ("Escludi two.mkv", "exclude:abc123:2") in rendered.buttons
 

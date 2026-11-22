@@ -69,6 +69,20 @@ def test_prepare_rejects_symlink_source(tmp_path: Path) -> None:
         publisher.prepare_file("session-one", "episode.mkv", link, source.stat().st_size)
 
 
+def test_prepare_rejects_symlink_session_directory(tmp_path: Path) -> None:
+    publisher = _publisher(tmp_path)
+    publisher.preflight()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (publisher.staging / "session-one").symlink_to(outside, target_is_directory=True)
+    source = _source(tmp_path)
+
+    with pytest.raises(ImporterError, match="symlink"):
+        publisher.prepare_file("session-one", "episode.mkv", source, 5)
+
+    assert not (outside / "episode.mkv").exists()
+
+
 def test_preflight_rejects_different_filesystems(tmp_path: Path, monkeypatch) -> None:
     publisher = _publisher(tmp_path)
     monkeypatch.setattr(
@@ -123,6 +137,24 @@ def test_publishes_one_file_at_gate_root(tmp_path: Path) -> None:
 
     assert published == (publisher.gate / "episode.mkv",)
     assert published[0].read_bytes() == b"video"
+
+
+def test_single_file_recovery_accepts_completed_target_and_empty_session_dir(
+    tmp_path: Path,
+) -> None:
+    publisher = _publisher(tmp_path)
+    source = _source(tmp_path)
+    staged = publisher.prepare_file("session-one", "episode.mkv", source, 5)
+    base = _session((_file(1, "episode.mkv", staged),))
+    planned = publisher.plan_publication(base)
+    publishing = replace(
+        base, state=SessionState.PUBLISHING, published_paths=planned
+    )
+    publisher.publish(publishing)
+    (publisher.staging / "session-one").mkdir()
+
+    assert publisher.publish(publishing) == planned
+    assert not (publisher.staging / "session-one").exists()
 
 
 def test_publishes_multiple_files_by_one_directory_rename(tmp_path: Path) -> None:
