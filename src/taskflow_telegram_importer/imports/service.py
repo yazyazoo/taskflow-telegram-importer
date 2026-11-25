@@ -8,15 +8,20 @@ from typing import Callable
 
 from taskflow_telegram_importer.downloads import DownloadCoordinator
 from taskflow_telegram_importer.errors import ImporterError
+from taskflow_telegram_importer.filenames import normalize_episode_token
 from taskflow_telegram_importer.publisher import FilesystemPublisher
 from taskflow_telegram_importer.processors import ContentProcessor
 from taskflow_telegram_importer.sessions import (
     EditorialHint,
     FileState,
     ImportFile,
+    ImportMode,
     ImportSession,
+    QuickStage,
+    QuickWorkflowDraft,
     SessionRepository,
     SessionState,
+    WorkflowPreset,
     parse_editorial_hint,
 )
 
@@ -32,12 +37,20 @@ class ImportService:
         *,
         id_factory: Callable[[], str] | None = None,
         processor: ContentProcessor | None = None,
+        tmdb_client=None,
+        taskflow_client=None,
+        quick_orchestrator=None,
+        episode_patterns=(),
     ) -> None:
         self._repository = repository
         self._coordinator = coordinator
         self._publisher = publisher
         self._id_factory = id_factory or (lambda: uuid.uuid4().hex)
         self._processor = processor
+        self._tmdb = tmdb_client
+        self._taskflow = taskflow_client
+        self._quick_orchestrator = quick_orchestrator
+        self._episode_patterns = tuple(episode_patterns)
         self._listeners = []
 
     def receive_descriptor(
@@ -83,7 +96,6 @@ class ImportService:
         captions = session.captions + ((caption,) if caption and caption.strip() else ())
         session = replace(session, files=session.files + (file,), captions=captions)
         self._repository.save(session)
-        self._coordinator.start(session.session_id, file)
         _LOGGER.info("received video session=%s message=%d", session.session_id, message_id)
         return session
 
@@ -98,6 +110,174 @@ class ImportService:
         )
         session = replace(session, state=SessionState.SEALED, editorial_hint=hint)
         self._repository.save(session)
+        return session
+
+    def start_manual(self, session_id: str, user_id: int) -> ImportSession:
+        session = self._owned(session_id, user_id)
+        if session.state is not SessionState.SEALED or session.mode is not None:
+            raise ImporterError("manual branch is unavailable")
+        session = replace(
+            session,
+            mode=ImportMode.MANUAL,
+            metadata_confirmed=True,
+        )
+        self._repository.save(session)
+        self._start_downloads(session)
+        return session
+
+    def begin_quick(self, session_id: str, user_id: int) -> ImportSession:
+        session = self._owned(session_id, user_id)
+        if session.state is not SessionState.SEALED or session.mode is not None:
+            raise ImporterError("quick workflow branch is unavailable")
+        session = replace(
+            session,
+            mode=ImportMode.QUICK,
+            quick=QuickWorkflowDraft(stage=QuickStage.MEDIA_KIND),
+            metadata_confirmed=False,
+        )
+        self._repository.save(session)
+        return session
+
+    def set_quick_media_kind(
+        self, session_id: str, user_id: int, media_kind: str
+    ) -> ImportSession:
+        session = self._quick_session(session_id, user_id)
+        if media_kind not in {"movie", "tv"}:
+            raise ImporterError("media kind must be movie or tv")
+        session = replace(
+            session,
+            quick=replace(
+                session.quick,
+                stage=QuickStage.QUERY,
+                media_kind=media_kind,
+                candidates=(),
+                selected_tmdb_id=None,
+                presets=(),
+                preset_code=None,
+            ),
+        )
+        self._repository.save(session)
+        return session
+
+    async def search_quick(
+        self, session_id: str, user_id: int, title: str, year: int
+    ) -> ImportSession:
+        session = self._quick_session(session_id, user_id)
+        if self._tmdb is None or session.quick.media_kind not in {"movie", "tv"}:
+            raise ImporterError("quick workflow search is unavailable")
+        candidates = await self._tmdb.search(session.quick.media_kind, title, year)
+        session = replace(
+            session,
+            quick=replace(
+                session.quick,
+                stage=QuickStage.CANDIDATES,
+                query_title=title.strip(),
+                query_year=year,
+                candidates=candidates,
+            ),
+        )
+        self._repository.save(session)
+        return session
+
+    async def select_quick_candidate(
+        self, session_id: str, user_id: int, tmdb_id: int
+    ) -> ImportSession:
+        session = self._quick_session(session_id, user_id)
+        candidate = next(
+            (item for item in session.quick.candidates if item.tmdb_id == tmdb_id), None
+        )
+        if candidate is None:
+            raise ImporterError("TMDB candidate is unavailable")
+        if self._taskflow is None:
+            raise ImporterError("TaskFlow preset catalog is unavailable")
+        documents = await self._taskflow.list_presets()
+        presets = tuple(
+            WorkflowPreset(str(item["code"]), str(item["name"]))
+            for item in documents
+            if isinstance(item.get("code"), str) and isinstance(item.get("name"), str)
+        )
+        if not presets:
+            raise ImporterError("TaskFlow has no workflow presets")
+        session = replace(
+            session,
+            editorial_hint=EditorialHint(candidate.title, candidate.year),
+            quick=replace(
+                session.quick,
+                stage=QuickStage.PRESET,
+                selected_tmdb_id=tmdb_id,
+                presets=presets,
+            ),
+        )
+        self._repository.save(session)
+        return session
+
+    def select_quick_preset(
+        self, session_id: str, user_id: int, preset_code: str
+    ) -> ImportSession:
+        session = self._quick_session(session_id, user_id)
+        if preset_code not in {item.code for item in session.quick.presets}:
+            raise ImporterError("TaskFlow preset is unavailable")
+        session = replace(
+            session,
+            quick=replace(
+                session.quick, stage=QuickStage.READY, preset_code=preset_code
+            ),
+        )
+        self._repository.save(session)
+        return session
+
+    def configure_quick(
+        self,
+        session_id: str,
+        user_id: int,
+        *,
+        cleanup_on_success: bool | None = None,
+        sub_ita: bool | None = None,
+    ) -> ImportSession:
+        session = self._quick_session(session_id, user_id)
+        session = replace(
+            session,
+            quick=replace(
+                session.quick,
+                cleanup_on_success=(
+                    session.quick.cleanup_on_success
+                    if cleanup_on_success is None else cleanup_on_success
+                ),
+                sub_ita=session.quick.sub_ita if sub_ita is None else sub_ita,
+            ),
+        )
+        self._repository.save(session)
+        return session
+
+    def start_quick(self, session_id: str, user_id: int) -> ImportSession:
+        session = self._quick_session(session_id, user_id)
+        if (
+            session.quick.stage is not QuickStage.READY
+            or session.quick.selected_tmdb_id is None
+            or not session.quick.preset_code
+        ):
+            raise ImporterError("quick workflow draft is incomplete")
+        if session.quick.sub_ita and session.quick.media_kind != "movie":
+            raise ImporterError("sub-ita is supported only for movies")
+        files = session.files
+        if session.quick.media_kind == "tv":
+            files = tuple(
+                replace(
+                    file,
+                    filename=normalize_episode_token(
+                        file.filename, self._episode_patterns
+                    ),
+                )
+                for file in files
+            )
+        session = replace(
+            session,
+            files=files,
+            metadata_confirmed=True,
+            quick=replace(session.quick, stage=QuickStage.DOWNLOADING),
+        )
+        self._repository.save(session)
+        self._start_downloads(session)
         return session
 
     def edit_metadata(
@@ -177,18 +357,32 @@ class ImportService:
         _LOGGER.info("session published session=%s files=%d", session.session_id, len(published_paths))
         return session
 
-    def recover(self) -> None:
+    async def recover(self) -> None:
         for session in self._repository.list_all():
             if session.state is SessionState.PUBLISHING or (
                 session.state is SessionState.SEALED and session.metadata_confirmed
             ):
-                self.reconcile(session.session_id)
+                session = self.reconcile(session.session_id)
+            if (
+                session.state is SessionState.PUBLISHED
+                and session.mode is ImportMode.QUICK
+                and session.quick is not None
+                and session.quick.stage not in {QuickStage.STARTED, QuickStage.FAILED}
+            ):
+                await self._complete_quick(session)
 
     def add_listener(self, listener) -> None:
         self._listeners.append(listener)
 
     async def file_changed(self, session_id: str) -> ImportSession:
         session = self.reconcile(session_id)
+        if (
+            session.state is SessionState.PUBLISHED
+            and session.mode is ImportMode.QUICK
+            and session.quick is not None
+            and session.quick.stage not in {QuickStage.STARTED, QuickStage.FAILED}
+        ):
+            session = await self._complete_quick(session)
         for listener in tuple(self._listeners):
             result = listener(session)
             if inspect.isawaitable(result):
@@ -248,4 +442,37 @@ class ImportService:
         session = self._repository.load(session_id)
         if session.user_id != user_id:
             raise ImporterError("session belongs to another operator")
+        return session
+
+    def _quick_session(self, session_id: str, user_id: int) -> ImportSession:
+        session = self._owned(session_id, user_id)
+        if session.mode is not ImportMode.QUICK or session.quick is None:
+            raise ImporterError("session is not a quick workflow")
+        return session
+
+    def _start_downloads(self, session: ImportSession) -> None:
+        for file in session.files:
+            if file.state is FileState.RECEIVED:
+                self._coordinator.start(session.session_id, file)
+
+    async def _complete_quick(self, session: ImportSession) -> ImportSession:
+        assert session.quick is not None
+        session = replace(
+            session, quick=replace(session.quick, stage=QuickStage.PUBLISHED)
+        )
+        self._repository.save(session)
+        try:
+            if self._quick_orchestrator is None:
+                raise ImporterError("quick workflow automation is unavailable")
+            session = await self._quick_orchestrator.execute(session)
+        except Exception as exc:
+            session = replace(
+                session,
+                quick=replace(
+                    session.quick,
+                    stage=QuickStage.FAILED,
+                    error=f"{type(exc).__name__}: {exc}",
+                ),
+            )
+        self._repository.save(session)
         return session

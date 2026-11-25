@@ -16,6 +16,18 @@ from taskflow_telegram_importer.sessions import (
 )
 
 
+class TmdbStub:
+    async def search(self, media_kind, title, year):
+        from taskflow_telegram_importer.sessions import TmdbCandidate
+
+        return (TmdbCandidate(42, "Cape Fear", "Cape Fear", 2025, "", None),)
+
+
+class TaskFlowStub:
+    async def list_presets(self):
+        return ({"code": "direct-media", "name": "Direct media"},)
+
+
 class CoordinatorStub:
     def __init__(self) -> None:
         self.started: list[tuple[str, int]] = []
@@ -36,12 +48,19 @@ class CoordinatorStub:
         self.deleted.append(session_id)
 
 
-def _service(tmp_path: Path):
+def _service(tmp_path: Path, *, tmdb_client=None, taskflow_client=None):
     repository = SessionRepository(tmp_path / "manifests")
     publisher = FilesystemPublisher(tmp_path / "staging", tmp_path / "gate", 0)
     coordinator = CoordinatorStub()
     ids = iter(("session-one", "session-two", "session-three"))
-    service = ImportService(repository, coordinator, publisher, id_factory=lambda: next(ids))
+    service = ImportService(
+        repository,
+        coordinator,
+        publisher,
+        id_factory=lambda: next(ids),
+        tmdb_client=tmdb_client,
+        taskflow_client=taskflow_client,
+    )
     return service, repository, publisher, coordinator
 
 
@@ -67,7 +86,7 @@ def test_descriptor_is_optional_and_caption_is_retained_without_photo(tmp_path: 
     assert session.descriptor_message_ids == (90,)
 
 
-def test_received_files_share_one_collecting_session_and_start_immediately(
+def test_received_files_share_one_collecting_session_without_starting_downloads(
     tmp_path: Path,
 ) -> None:
     service, repository, _, coordinator = _service(tmp_path)
@@ -78,7 +97,7 @@ def test_received_files_share_one_collecting_session_and_start_immediately(
 
     assert first.session_id == second.session_id == duplicate.session_id
     assert len(repository.load(first.session_id).files) == 2
-    assert coordinator.started == [(first.session_id, 1), (first.session_id, 2)]
+    assert coordinator.started == []
 
 
 def test_session_milestones_are_logged(tmp_path: Path, caplog) -> None:
@@ -116,6 +135,48 @@ def test_duplicate_update_from_sealed_session_is_not_added_or_downloaded_again(
 
     assert duplicate.session_id == first.session_id
     assert len(repository.list_all()) == 1
+    assert coordinator.started == []
+
+
+def test_manual_branch_starts_all_downloads_only_after_collection_is_closed(
+    tmp_path: Path,
+) -> None:
+    service, _, _, coordinator = _service(tmp_path)
+    first = _receive(service, 1)
+    _receive(service, 2)
+    service.finish_collection(10)
+
+    selected = service.start_manual(first.session_id, 10)
+
+    assert selected.mode.value == "manual"
+    assert selected.metadata_confirmed is True
+    assert coordinator.started == [(first.session_id, 1), (first.session_id, 2)]
+
+
+@pytest.mark.asyncio
+async def test_quick_branch_collects_tmdb_and_preset_before_starting_downloads(
+    tmp_path: Path,
+) -> None:
+    service, _, _, coordinator = _service(
+        tmp_path, tmdb_client=TmdbStub(), taskflow_client=TaskFlowStub()
+    )
+    first = _receive(service, 1)
+    service.finish_collection(10)
+
+    service.begin_quick(first.session_id, 10)
+    service.set_quick_media_kind(first.session_id, 10, "tv")
+    searched = await service.search_quick(first.session_id, 10, "Cape Fear", 2025)
+    selected = await service.select_quick_candidate(first.session_id, 10, 42)
+    ready = service.select_quick_preset(first.session_id, 10, "direct-media")
+
+    assert searched.quick.candidates[0].tmdb_id == 42
+    assert selected.quick.presets[0].code == "direct-media"
+    assert ready.quick.stage.value == "ready"
+    assert coordinator.started == []
+
+    started = service.start_quick(first.session_id, 10)
+
+    assert started.quick.stage.value == "downloading"
     assert coordinator.started == [(first.session_id, 1)]
 
 

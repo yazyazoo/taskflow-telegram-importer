@@ -269,7 +269,10 @@ async def test_recovery_restarts_only_incomplete_unpublished_files(tmp_path: Pat
     complete = replace(_file(1, FileState.COMPLETE), staging_path=complete_path)
     incomplete = _file(2, FileState.DOWNLOADING)
     failed = _file(3, FileState.FAILED)
-    repository.create(_session("one", (complete, incomplete, failed), SessionState.SEALED))
+    repository.create(replace(
+        _session("one", (complete, incomplete, failed), SessionState.SEALED),
+        metadata_confirmed=True,
+    ))
     repository.create(_session("two", (_file(4),), SessionState.PUBLISHED))
     stale_directory = publisher.staging / "one"
     stale_directory.mkdir(parents=True)

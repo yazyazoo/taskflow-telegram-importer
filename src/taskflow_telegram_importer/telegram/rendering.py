@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from taskflow_telegram_importer.sessions import FileState, ImportSession, SessionState
+from taskflow_telegram_importer.sessions import (
+    FileState, ImportMode, ImportSession, QuickStage, SessionState,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -26,6 +28,16 @@ def render_session(
         lines.append(f"Titolo: {session.editorial_hint.title} ({session.editorial_hint.year})")
     if session.state is SessionState.PUBLISHED:
         lines.append("Pubblicazione completata")
+    if session.mode is ImportMode.MANUAL:
+        lines.append("Ramo: WebUI TaskFlow")
+    elif session.mode is ImportMode.QUICK:
+        lines.append("Ramo: Quick Workflow")
+        if session.quick is not None:
+            lines.append(f"Quick Workflow: {session.quick.stage.value}")
+            if session.quick.workflow_id:
+                lines.append(f"Workflow TaskFlow: {session.quick.workflow_id}")
+            if session.quick.error:
+                lines.append(f"Errore: {session.quick.error}")
 
     queued = 0
     for file in session.files:
@@ -71,18 +83,66 @@ def render_session(
         buttons.append((f"Ho finito di inoltrare · {len(session.files)} file", f"finish:{session.session_id}"))
         buttons.append(("Elimina intera sessione", f"delete-request:{session.session_id}"))
     elif session.state is SessionState.SEALED:
-        if session.metadata_confirmed:
-            lines.append("Dati confermati · Download in corso")
-            buttons.append(("Annulla", f"delete-request:{session.session_id}"))
-        else:
+        if session.mode is None:
             buttons.extend(
                 [
-                    ("Conferma e pubblica", f"confirm:{session.session_id}"),
-                    ("Modifica", f"edit:{session.session_id}"),
+                    ("Finalizza con WebUI TaskFlow", f"manual:{session.session_id}"),
+                    ("Quick Workflow", f"quick:{session.session_id}"),
                     ("Annulla", f"delete-request:{session.session_id}"),
                 ]
             )
+        elif session.mode is ImportMode.QUICK and session.quick is not None:
+            _render_quick_controls(session, lines, buttons)
+        elif session.metadata_confirmed:
+            lines.append("Dati confermati · Download in corso")
+            buttons.append(("Annulla", f"delete-request:{session.session_id}"))
     return RenderedStatus("\n".join(lines), tuple(buttons))
+
+
+def _render_quick_controls(session, lines, buttons) -> None:
+    draft = session.quick
+    if draft.stage is QuickStage.MEDIA_KIND:
+        lines.append("Scegli il tipo di contenuto per la ricerca TMDB.")
+        buttons.extend(
+            [
+                ("Film", f"kind:{session.session_id}:movie"),
+                ("Serie TV", f"kind:{session.session_id}:tv"),
+            ]
+        )
+    elif draft.stage is QuickStage.QUERY:
+        lines.append("Inserisci titolo e anno prima della ricerca TMDB.")
+        buttons.append(("Cerca su TMDB", f"query:{session.session_id}"))
+    elif draft.stage is QuickStage.CANDIDATES:
+        lines.append("Scegli il risultato TMDB corretto.")
+        buttons.extend(
+            (
+                f"{candidate.title} ({candidate.year}) · TMDB {candidate.tmdb_id}",
+                f"candidate:{session.session_id}:{candidate.tmdb_id}",
+            )
+            for candidate in draft.candidates
+        )
+    elif draft.stage is QuickStage.PRESET:
+        lines.append("Scegli il preset TaskFlow.")
+        buttons.extend(
+            (preset.name, f"preset:{session.session_id}:{index}")
+            for index, preset in enumerate(draft.presets)
+        )
+    elif draft.stage is QuickStage.READY:
+        lines.append(
+            "Configurazione pronta · "
+            f"cleanup {'ON' if draft.cleanup_on_success else 'OFF'} · "
+            f"sub-ita {'ON' if draft.sub_ita else 'OFF'}"
+        )
+        buttons.extend(
+            [
+                ("Attiva/disattiva cleanup", f"cleanup:{session.session_id}"),
+                ("Attiva/disattiva sub-ita", f"subita:{session.session_id}"),
+                ("Avvia Quick Workflow", f"quick-start:{session.session_id}"),
+            ]
+        )
+    elif draft.stage is QuickStage.DOWNLOADING:
+        lines.append("Configurazione salvata · Download in corso")
+    buttons.append(("Annulla", f"delete-request:{session.session_id}"))
 
 
 def _mib(value: int | float) -> float:

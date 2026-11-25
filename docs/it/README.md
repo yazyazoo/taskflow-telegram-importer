@@ -4,8 +4,9 @@ Importatore privato da Telegram al filesystem usato da TaskFlow.
 
 Il servizio riceve video inoltrati direttamente tramite Telethon/MTProto,
 mantiene sessioni persistenti e pubblica nella gate dell'integrazione
-filesystem soltanto file completi. Non chiama le API TaskFlow e non crea
-workflow.
+filesystem soltanto file completi. Il ramo manuale termina nella gate; il
+prototipo Quick Workflow cerca direttamente su TMDB, riconcilia i package ID
+filesystem e crea/avvia il workflow tramite le API TaskFlow.
 
 La prima implementazione include autorizzazione privata, sessioni persistenti,
 download concorrenti, recovery, pubblicazione atomica e azioni operatore.

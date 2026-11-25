@@ -101,16 +101,12 @@ class FilesystemPublisher:
         files = tuple(item for item in session.files if item.state is not FileState.EXCLUDED)
         if len(files) == 1:
             return (self.gate / files[0].filename,)
-        if session.editorial_hint is None:
-            raise ImporterError("session has no title and year")
-        target_directory = self.gate / normalize_session_directory(
-            session.editorial_hint.title, session.editorial_hint.year
-        )
+        target_directory = self.gate / _publication_directory(session)
         return tuple(target_directory / item.filename for item in files)
 
     def publish(self, session: ImportSession) -> tuple[Path, ...]:
         self.preflight()
-        if session.state not in {SessionState.SEALED, SessionState.PUBLISHING} or session.editorial_hint is None:
+        if session.state not in {SessionState.SEALED, SessionState.PUBLISHING}:
             raise ImporterError("session is not confirmed for publication")
         files = tuple(item for item in session.files if item.state is not FileState.EXCLUDED)
         if not files or any(
@@ -154,9 +150,6 @@ class FilesystemPublisher:
             _LOGGER.info("published session=%s files=1", session.session_id)
             return (target,)
 
-        directory_name = normalize_session_directory(
-            session.editorial_hint.title, session.editorial_hint.year
-        )
         target_directory = planned[0].parent
         _require_contained(target_directory, self.gate)
         _ensure_absent(target_directory)
@@ -265,6 +258,14 @@ def _publication_is_complete(planned, files) -> bool:
         if target.is_symlink() or not target.is_file() or target.stat().st_size != item.expected_size:
             return False
     return True
+
+
+def _publication_directory(session: ImportSession) -> str:
+    if session.editorial_hint is not None:
+        return normalize_session_directory(
+            session.editorial_hint.title, session.editorial_hint.year
+        )
+    return session.session_id
 
 
 def _device_id(path: Path) -> int:

@@ -4,12 +4,12 @@ Private Telegram-to-filesystem importer for TaskFlow.
 
 The service receives forwarded video files through Telethon/MTProto, persists
 import sessions, and publishes only complete files to TaskFlow's existing
-filesystem integration gate. It does not call TaskFlow APIs or create workflows.
+filesystem integration gate. The manual branch stops there; the Quick Workflow
+prototype resolves TMDB metadata, reconciles TaskFlow filesystem package IDs,
+then creates and starts a preset-backed workflow through the TaskFlow API.
 
-Phase-one implementation is available: private-chat authorization, persistent
-sessions, concurrent Telegram acquisition, crash recovery, atomic filesystem
-publication, and operator-driven retry/exclusion/deletion. The importer never
-calls TaskFlow APIs.
+Downloads start only after collection is sealed and the operator selects a
+branch. The Quick Workflow draft is persisted before acquisition starts.
 
 Local automated checks are not a substitute for the required final seedbox
 test with real Telegram files over MTProto.

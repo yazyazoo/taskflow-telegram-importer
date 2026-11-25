@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import inspect
 import logging
 import signal
 from dataclasses import dataclass
@@ -9,12 +10,16 @@ from pathlib import Path
 from typing import Callable
 
 from taskflow_telegram_importer.config import load_settings
+from taskflow_telegram_importer.automation import QuickWorkflowOrchestrator
 from taskflow_telegram_importer.downloads import DownloadCoordinator
 from taskflow_telegram_importer.imports import ImportService
+from taskflow_telegram_importer.http import UrllibJsonTransport
 from taskflow_telegram_importer.logging import LoggingController, configure_logging
 from taskflow_telegram_importer.processors import VideoProcessor
 from taskflow_telegram_importer.publisher import FilesystemPublisher
 from taskflow_telegram_importer.sessions import SessionRepository
+from taskflow_telegram_importer.taskflow import TaskFlowClient
+from taskflow_telegram_importer.tmdb import TmdbClient
 from taskflow_telegram_importer.telegram import (
     TelegramHandlers,
     TelethonFileSource,
@@ -31,7 +36,7 @@ class Runtime:
     coordinator: DownloadCoordinator
     publisher: FilesystemPublisher
     logging_controller: LoggingController | None = None
-    recoverer: Callable[[], None] | None = None
+    recoverer: Callable[[], object] | None = None
     _started: bool = False
 
     async def start(self) -> None:
@@ -40,7 +45,9 @@ class Runtime:
         self._started = True
         self.coordinator.recover()
         if self.recoverer is not None:
-            self.recoverer()
+            recovered = self.recoverer()
+            if inspect.isawaitable(recovered):
+                await recovered
         _LOGGER.info("runtime started")
 
     async def shutdown(self) -> None:
@@ -93,8 +100,33 @@ def compose(project_root: Path) -> Runtime:
         processor = VideoProcessor(
             settings.files.allowed_extensions, settings.paths.staging
         )
+        transport = UrllibJsonTransport()
+        taskflow_client = TaskFlowClient(
+            transport,
+            base_url=settings.taskflow.api_base_url,
+            token=settings.taskflow.api_token,
+            filesystem_integration_code=settings.taskflow.filesystem_integration_code,
+            timeout_seconds=settings.taskflow.request_timeout_seconds,
+            reconciliation_poll_seconds=settings.taskflow.reconciliation_poll_seconds,
+            reconciliation_timeout_seconds=settings.taskflow.reconciliation_timeout_seconds,
+        )
+        tmdb_client = TmdbClient(
+            transport,
+            base_url=settings.tmdb.api_base_url,
+            api_key=settings.tmdb.api_key,
+            language=settings.tmdb.language,
+            timeout_seconds=settings.tmdb.request_timeout_seconds,
+            max_results=settings.tmdb.max_results,
+        )
         service = ImportService(
-            repository, coordinator, publisher, processor=processor
+            repository,
+            coordinator,
+            publisher,
+            processor=processor,
+            tmdb_client=tmdb_client,
+            taskflow_client=taskflow_client,
+            quick_orchestrator=QuickWorkflowOrchestrator(taskflow_client),
+            episode_patterns=settings.episode_patterns,
         )
         coordinator.set_change_callback(service.file_changed)
         handlers = TelegramHandlers(

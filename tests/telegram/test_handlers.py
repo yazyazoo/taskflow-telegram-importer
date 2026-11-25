@@ -10,7 +10,10 @@ from taskflow_telegram_importer.sessions import (
     EditorialHint,
     FileState,
     ImportFile,
+    ImportMode,
     ImportSession,
+    QuickStage,
+    QuickWorkflowDraft,
     SessionState,
 )
 from taskflow_telegram_importer.telegram.handlers import TelegramHandlers
@@ -48,6 +51,36 @@ class ServiceStub:
 
     def confirm_metadata(self, session_id, user_id):
         self.calls.append(("confirm", session_id, user_id))
+        return self.session
+
+    def start_manual(self, session_id, user_id):
+        self.calls.append(("manual", session_id, user_id))
+        self.session = replace(
+            self.session, mode=ImportMode.MANUAL, metadata_confirmed=True
+        )
+        return self.session
+
+    def begin_quick(self, session_id, user_id):
+        self.calls.append(("quick", session_id, user_id))
+        self.session = replace(
+            self.session,
+            mode=ImportMode.QUICK,
+            quick=QuickWorkflowDraft(QuickStage.MEDIA_KIND),
+        )
+        return self.session
+
+    def set_quick_media_kind(self, session_id, user_id, media_kind):
+        self.calls.append(("kind", session_id, user_id, media_kind))
+        self.session = replace(
+            self.session,
+            quick=replace(
+                self.session.quick, stage=QuickStage.QUERY, media_kind=media_kind
+            ),
+        )
+        return self.session
+
+    async def search_quick(self, session_id, user_id, title, year):
+        self.calls.append(("search", session_id, user_id, title, year))
         return self.session
 
     def edit_metadata(self, session_id, user_id, title, year):
@@ -226,6 +259,22 @@ async def test_taskflow_command_opens_configured_mobile_webui() -> None:
 
     assert client.sent[0][1] == "Apri TaskFlow dal telefono."
     assert client.sent[0][2]
+
+
+@pytest.mark.asyncio
+async def test_quick_branch_asks_kind_then_searches_tmdb_without_downloading() -> None:
+    handlers, service, client = _handlers()
+    service.session = replace(service.session, state=SessionState.SEALED)
+
+    await handlers.handle_callback(FakeEvent(data="quick:abc123"))
+    await handlers.handle_callback(FakeEvent(data="kind:abc123:tv"))
+    await handlers.handle_callback(FakeEvent(data="query:abc123"))
+    await handlers.handle_message(FakeEvent(text="Cape Fear | 2025"))
+
+    assert ("quick", "abc123", 10) in service.calls
+    assert ("kind", "abc123", 10, "tv") in service.calls
+    assert ("search", "abc123", 10, "Cape Fear", 2025) in service.calls
+    assert any(item[1] == "Invia: Titolo | Anno" for item in client.sent)
 
 
 @pytest.mark.asyncio

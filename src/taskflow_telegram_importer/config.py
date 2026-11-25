@@ -7,6 +7,7 @@ from typing import Any, Mapping
 import yaml
 
 from .errors import ConfigError
+from .filenames import EpisodePattern
 
 
 @dataclass(frozen=True, slots=True)
@@ -41,18 +42,37 @@ class LoggingSettings:
 @dataclass(frozen=True, slots=True)
 class TaskFlowSettings:
     webui_url: str
+    api_base_url: str
+    api_token: str
+    filesystem_integration_code: str
+    request_timeout_seconds: float
+    reconciliation_poll_seconds: float
+    reconciliation_timeout_seconds: float
+
+
+@dataclass(frozen=True, slots=True)
+class TmdbSettings:
+    api_base_url: str
+    api_key: str
+    language: str
+    request_timeout_seconds: float
+    max_results: int
 
 
 @dataclass(frozen=True, slots=True)
 class Settings:
     telegram: TelegramSettings
     taskflow: TaskFlowSettings
+    tmdb: TmdbSettings
     paths: PathSettings
     files: FileSettings
     logging: LoggingSettings
+    episode_patterns: tuple[EpisodePattern, ...]
 
 
-_ROOT_KEYS = {"telegram", "taskflow", "paths", "files", "logging"}
+_ROOT_KEYS = {
+    "telegram", "taskflow", "tmdb", "paths", "files", "logging", "episode_patterns"
+}
 _TELEGRAM_KEYS = {
     "api_id",
     "api_hash",
@@ -66,7 +86,14 @@ _PATH_KEYS = {"staging", "gate", "log_file"}
 _FILE_KEYS = {"allowed_extensions", "minimum_free_gib"}
 _LOGGING_KEYS = {"level"}
 _LOG_LEVELS = {"DEBUG", "INFO", "WARNING", "ERROR"}
-_TASKFLOW_KEYS = {"webui_url"}
+_TASKFLOW_KEYS = {
+    "webui_url", "api_base_url", "api_token", "filesystem_integration_code",
+    "request_timeout_seconds", "reconciliation_poll_seconds",
+    "reconciliation_timeout_seconds",
+}
+_TMDB_KEYS = {
+    "api_base_url", "api_key", "language", "request_timeout_seconds", "max_results"
+}
 
 
 def load_settings(project_root: Path) -> Settings:
@@ -85,6 +112,8 @@ def load_settings(project_root: Path) -> Settings:
     _require_exact_keys(telegram_raw, _TELEGRAM_KEYS, "telegram")
     taskflow_raw = _mapping(root["taskflow"], "taskflow")
     _require_exact_keys(taskflow_raw, _TASKFLOW_KEYS, "taskflow")
+    tmdb_raw = _mapping(root["tmdb"], "tmdb")
+    _require_exact_keys(tmdb_raw, _TMDB_KEYS, "tmdb")
 
     paths_raw = _mapping(root["paths"], "paths")
     _require_exact_keys(paths_raw, _PATH_KEYS, "paths")
@@ -125,7 +154,33 @@ def load_settings(project_root: Path) -> Settings:
     return Settings(
         telegram=telegram,
         taskflow=TaskFlowSettings(
-            webui_url=_https_url(taskflow_raw["webui_url"], "taskflow.webui_url")
+            webui_url=_https_url(taskflow_raw["webui_url"], "taskflow.webui_url"),
+            api_base_url=_http_url(taskflow_raw["api_base_url"], "taskflow.api_base_url"),
+            api_token=_nonempty_string(taskflow_raw["api_token"], "taskflow.api_token"),
+            filesystem_integration_code=_nonempty_string(
+                taskflow_raw["filesystem_integration_code"],
+                "taskflow.filesystem_integration_code",
+            ),
+            request_timeout_seconds=_positive_number(
+                taskflow_raw["request_timeout_seconds"], "taskflow.request_timeout_seconds"
+            ),
+            reconciliation_poll_seconds=_positive_number(
+                taskflow_raw["reconciliation_poll_seconds"],
+                "taskflow.reconciliation_poll_seconds",
+            ),
+            reconciliation_timeout_seconds=_positive_number(
+                taskflow_raw["reconciliation_timeout_seconds"],
+                "taskflow.reconciliation_timeout_seconds",
+            ),
+        ),
+        tmdb=TmdbSettings(
+            api_base_url=_http_url(tmdb_raw["api_base_url"], "tmdb.api_base_url"),
+            api_key=_nonempty_string(tmdb_raw["api_key"], "tmdb.api_key"),
+            language=_nonempty_string(tmdb_raw["language"], "tmdb.language"),
+            request_timeout_seconds=_positive_number(
+                tmdb_raw["request_timeout_seconds"], "tmdb.request_timeout_seconds"
+            ),
+            max_results=_positive_integer(tmdb_raw["max_results"], "tmdb.max_results"),
         ),
         paths=paths,
         files=FileSettings(
@@ -133,6 +188,7 @@ def load_settings(project_root: Path) -> Settings:
             minimum_free_gib=minimum_free_gib,
         ),
         logging=LoggingSettings(level=level),
+        episode_patterns=_episode_patterns(root["episode_patterns"]),
     )
 
 
@@ -163,6 +219,13 @@ def _https_url(value: Any, name: str) -> str:
     text = _nonempty_string(value, name)
     if not text.startswith("https://"):
         raise ConfigError(f"{name} must be an HTTPS URL")
+    return text
+
+
+def _http_url(value: Any, name: str) -> str:
+    text = _nonempty_string(value, name).rstrip("/")
+    if not text.startswith(("http://", "https://")):
+        raise ConfigError(f"{name} must be an HTTP or HTTPS URL")
     return text
 
 
@@ -226,4 +289,18 @@ def _extensions(value: Any) -> tuple[str, ...]:
             raise ConfigError("every extension must be a simple file extension")
         if extension not in result:
             result.append(extension)
+    return tuple(result)
+
+
+def _episode_patterns(value: Any) -> tuple[EpisodePattern, ...]:
+    if not isinstance(value, list) or not value:
+        raise ConfigError("episode_patterns must contain at least one pattern")
+    result = []
+    for item in value:
+        mapping = _mapping(item, "episode pattern")
+        _require_exact_keys(mapping, {"token_regex", "item_regex"}, "episode pattern")
+        result.append(EpisodePattern(
+            _nonempty_string(mapping["token_regex"], "episode token_regex"),
+            _nonempty_string(mapping["item_regex"], "episode item_regex"),
+        ))
     return tuple(result)

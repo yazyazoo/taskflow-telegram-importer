@@ -30,7 +30,7 @@ class TelegramHandlers:
         self._taskflow_webui_url = taskflow_webui_url
         self._refresh_seconds = refresh_seconds
         self._status_messages: dict[int, tuple[int, int]] = {}
-        self._editing: dict[int, str] = {}
+        self._editing: dict[int, tuple[str, str] | str] = {}
         self._terminal_notifications: set[tuple[str, str]] = set()
         service.add_listener(self.session_changed)
 
@@ -99,10 +99,49 @@ class TelegramHandlers:
                 session = self._service.finish_collection(user_id)
                 if session.session_id != session_id:
                     raise ImporterError("stale finish action")
+            elif action == "manual":
+                session = self._service.start_manual(session_id, user_id)
+            elif action == "quick":
+                session = self._service.begin_quick(session_id, user_id)
+            elif action == "kind":
+                session = self._service.set_quick_media_kind(
+                    session_id, user_id, tail[0]
+                )
+            elif action == "query":
+                self._editing[user_id] = ("quick-query", session_id)
+                await self._client.send_message(chat_id, "Invia: Titolo | Anno")
+                return
+            elif action == "candidate":
+                session = await self._service.select_quick_candidate(
+                    session_id, user_id, int(tail[0])
+                )
+            elif action == "preset":
+                index = int(tail[0])
+                if selected.quick is None or not 0 <= index < len(selected.quick.presets):
+                    raise ImporterError("TaskFlow preset is unavailable")
+                session = self._service.select_quick_preset(
+                    session_id, user_id, selected.quick.presets[index].code
+                )
+            elif action == "cleanup":
+                if selected.quick is None:
+                    raise ImporterError("session is not a quick workflow")
+                session = self._service.configure_quick(
+                    session_id,
+                    user_id,
+                    cleanup_on_success=not selected.quick.cleanup_on_success,
+                )
+            elif action == "subita":
+                if selected.quick is None:
+                    raise ImporterError("session is not a quick workflow")
+                session = self._service.configure_quick(
+                    session_id, user_id, sub_ita=not selected.quick.sub_ita
+                )
+            elif action == "quick-start":
+                session = self._service.start_quick(session_id, user_id)
             elif action == "confirm":
                 session = self._service.confirm_metadata(session_id, user_id)
             elif action == "edit":
-                self._editing[user_id] = session_id
+                self._editing[user_id] = ("metadata", session_id)
                 await self._client.send_message(chat_id, "Invia: Titolo | Anno")
                 return
             elif action == "retry":
@@ -145,13 +184,21 @@ class TelegramHandlers:
     ) -> None:
         try:
             title, year_text = (part.strip() for part in text.rsplit("|", 1))
-            session_id = self._editing[user_id]
-            session = self._service.edit_metadata(
-                session_id, user_id, title, int(year_text)
-            )
+            editing = self._editing[user_id]
+            mode, session_id = editing if isinstance(editing, tuple) else ("metadata", editing)
+            if mode == "quick-query":
+                session = await self._service.search_quick(
+                    session_id, user_id, title, int(year_text)
+                )
+                confirmation = "Ricerca TMDB completata. Scegli un risultato."
+            else:
+                session = self._service.edit_metadata(
+                    session_id, user_id, title, int(year_text)
+                )
+                confirmation = "Titolo e anno aggiornati."
             self._editing.pop(user_id, None)
             await self._delete_previous_status(user_id)
-            await self._client.send_message(chat_id, "Titolo e anno aggiornati.")
+            await self._client.send_message(chat_id, confirmation)
             await self._show_status(user_id, chat_id, session)
         except (ValueError, ImporterError):
             await self._client.send_message(
@@ -200,7 +247,13 @@ class TelegramHandlers:
         )
         if session.state is SessionState.PUBLISHED:
             key = (session.session_id, "published")
-            message = f"Sessione {session.session_id}: pubblicazione completata."
+            if session.quick is not None and session.quick.workflow_id:
+                message = (
+                    f"Sessione {session.session_id}: workflow TaskFlow "
+                    f"{session.quick.workflow_id} creato e avviato."
+                )
+            else:
+                message = f"Sessione {session.session_id}: pubblicazione completata."
         elif failed:
             key = (session.session_id, "failed:" + ",".join(map(str, failed)))
             message = f"Sessione {session.session_id}: uno o piu download sono falliti."

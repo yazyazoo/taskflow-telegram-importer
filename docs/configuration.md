@@ -18,11 +18,23 @@ private chats are accepted.
 
 The repository example uses two active transfers and a 30-second refresh.
 
-## TaskFlow WebUI
+## TaskFlow
 
 `taskflow.webui_url` is the HTTPS address opened by the Telegram `/taskflow`
 command. Authentication remains inside the normal TaskFlow WebUI login; the
 importer never appends the access token to the URL.
+
+`taskflow.api_base_url` and `api_token` authorize the Quick Workflow branch.
+`filesystem_integration_code` identifies the integration refreshed after gate
+publication. Poll and timeout values bound package-ID reconciliation; the bot
+matches the exact published path and byte size before creating a workflow.
+
+## TMDB
+
+`tmdb.api_key` belongs to this importer. The bot queries `api_base_url`
+directly with the configured language and returns at most `max_results`
+candidates. `episode_patterns` is configuration data used only for Quick TV
+sessions to normalize tokens such as `1x10` to `S01E10` before download.
 
 ## Paths and files
 

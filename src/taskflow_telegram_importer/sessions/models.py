@@ -22,10 +22,61 @@ class FileState(StrEnum):
     PUBLISHED = "published"
 
 
+class ImportMode(StrEnum):
+    MANUAL = "manual"
+    QUICK = "quick"
+
+
+class QuickStage(StrEnum):
+    MEDIA_KIND = "media_kind"
+    QUERY = "query"
+    CANDIDATES = "candidates"
+    PRESET = "preset"
+    READY = "ready"
+    DOWNLOADING = "downloading"
+    PUBLISHED = "published"
+    CREATING = "creating"
+    STARTED = "started"
+    FAILED = "failed"
+
+
 @dataclass(frozen=True, slots=True)
 class EditorialHint:
     title: str
     year: int
+
+
+@dataclass(frozen=True, slots=True)
+class TmdbCandidate:
+    tmdb_id: int
+    title: str
+    original_title: str
+    year: int
+    overview: str
+    poster_path: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class WorkflowPreset:
+    code: str
+    name: str
+
+
+@dataclass(frozen=True, slots=True)
+class QuickWorkflowDraft:
+    stage: QuickStage
+    media_kind: str | None = None
+    query_title: str | None = None
+    query_year: int | None = None
+    candidates: tuple[TmdbCandidate, ...] = ()
+    selected_tmdb_id: int | None = None
+    presets: tuple[WorkflowPreset, ...] = ()
+    preset_code: str | None = None
+    cleanup_on_success: bool = False
+    sub_ita: bool = False
+    taskflow_package_ids: tuple[str, ...] = ()
+    workflow_id: str | None = None
+    error: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -53,3 +104,5 @@ class ImportSession:
     editorial_hint: EditorialHint | None = None
     metadata_confirmed: bool = False
     published_paths: tuple[Path, ...] = ()
+    mode: ImportMode | None = None
+    quick: QuickWorkflowDraft | None = None

@@ -10,7 +10,10 @@ from taskflow_telegram_importer.errors import ImporterError
 from taskflow_telegram_importer.sessions import (
     FileState,
     ImportFile,
+    ImportMode,
     ImportSession,
+    QuickStage,
+    QuickWorkflowDraft,
     SessionRepository,
     SessionState,
 )
@@ -51,6 +54,27 @@ def test_manifest_round_trip_preserves_large_ids_paths_and_states(tmp_path: Path
         files=(staged,),
         state=SessionState.PUBLISHED,
         published_paths=(tmp_path / "gate" / "episode-10.mkv",),
+    )
+
+    repository.create(session)
+
+    assert repository.load(session.session_id) == session
+
+
+def test_manifest_round_trip_preserves_quick_workflow_draft(tmp_path: Path) -> None:
+    repository = SessionRepository(tmp_path)
+    session = replace(
+        _session(),
+        state=SessionState.SEALED,
+        mode=ImportMode.QUICK,
+        quick=QuickWorkflowDraft(
+            stage=QuickStage.READY,
+            media_kind="tv",
+            query_title="Cape Fear",
+            query_year=2025,
+            selected_tmdb_id=42,
+            preset_code="direct-media",
+        ),
     )
 
     repository.create(session)

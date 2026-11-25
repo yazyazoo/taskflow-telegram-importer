@@ -19,7 +19,22 @@ def _valid_config(tmp_path: Path) -> dict[str, object]:
             "max_concurrent_downloads": 2,
             "allowed_user_ids": [123456789, 987654321],
         },
-        "taskflow": {"webui_url": "https://taskflow.redprimrose.mov/ui/"},
+        "taskflow": {
+            "webui_url": "https://taskflow.redprimrose.mov/ui/",
+            "api_base_url": "https://taskflow.redprimrose.mov/api/v1",
+            "api_token": "taskflow-test-token",
+            "filesystem_integration_code": "local-media",
+            "request_timeout_seconds": 30,
+            "reconciliation_poll_seconds": 2,
+            "reconciliation_timeout_seconds": 120,
+        },
+        "tmdb": {
+            "api_base_url": "https://api.themoviedb.org/3",
+            "api_key": "tmdb-test-key",
+            "language": "it-IT",
+            "request_timeout_seconds": 30,
+            "max_results": 5,
+        },
         "paths": {
             "staging": str(tmp_path / "staging"),
             "gate": str(tmp_path / "gate"),
@@ -30,6 +45,12 @@ def _valid_config(tmp_path: Path) -> dict[str, object]:
             "minimum_free_gib": 12.5,
         },
         "logging": {"level": "INFO"},
+        "episode_patterns": [
+            {
+                "token_regex": r"(?i)(?<![A-Za-z0-9])(?P<season>\d{1,2})x(?P<first>\d{1,3})(?P<repeated>(?:x\d{1,3})+)?(?![A-Za-z0-9])",
+                "item_regex": r"(?i)x(?P<episode>\d{1,3})",
+            }
+        ],
     }
 
 
@@ -52,11 +73,16 @@ def test_load_settings_normalizes_complete_configuration(tmp_path: Path) -> None
     assert settings.telegram.progress_refresh_seconds == 30
     assert settings.telegram.max_concurrent_downloads == 2
     assert settings.taskflow.webui_url == "https://taskflow.redprimrose.mov/ui/"
+    assert settings.taskflow.api_token == "taskflow-test-token"
+    assert settings.taskflow.filesystem_integration_code == "local-media"
+    assert settings.tmdb.api_key == "tmdb-test-key"
+    assert settings.tmdb.max_results == 5
     assert settings.files.allowed_extensions == (".mkv", ".mp4", ".avi")
     assert settings.files.minimum_free_gib == 12.5
     assert settings.paths.staging == (tmp_path / "staging").resolve()
     assert settings.paths.gate == (tmp_path / "gate").resolve()
     assert settings.logging.level == "INFO"
+    assert len(settings.episode_patterns) == 1
 
 
 @pytest.mark.parametrize(

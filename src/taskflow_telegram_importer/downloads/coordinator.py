@@ -121,7 +121,7 @@ class DownloadCoordinator:
     def recover(self) -> None:
         recovered = 0
         for session in self._repository.list_all():
-            if session.state is SessionState.PUBLISHED:
+            if session.state is SessionState.PUBLISHED or not session.metadata_confirmed:
                 continue
             for file in session.files:
                 if file.state in {FileState.RECEIVED, FileState.DOWNLOADING}:

@@ -8,7 +8,10 @@ from typing import Any
 
 from taskflow_telegram_importer.errors import ImporterError
 
-from .models import EditorialHint, FileState, ImportFile, ImportSession, SessionState
+from .models import (
+    EditorialHint, FileState, ImportFile, ImportMode, ImportSession, QuickStage,
+    QuickWorkflowDraft, SessionState, TmdbCandidate, WorkflowPreset,
+)
 
 
 _SCHEMA_VERSION = 2
@@ -153,6 +156,38 @@ def _encode_session(session: ImportSession) -> dict[str, Any]:
         ),
         "metadata_confirmed": session.metadata_confirmed,
         "published_paths": [str(path) for path in session.published_paths],
+        "mode": session.mode.value if session.mode else None,
+        "quick": _encode_quick(session.quick),
+    }
+
+
+def _encode_quick(draft: QuickWorkflowDraft | None) -> dict[str, Any] | None:
+    if draft is None:
+        return None
+    return {
+        "stage": draft.stage.value,
+        "media_kind": draft.media_kind,
+        "query_title": draft.query_title,
+        "query_year": draft.query_year,
+        "candidates": [
+            {
+                "tmdb_id": item.tmdb_id,
+                "title": item.title,
+                "original_title": item.original_title,
+                "year": item.year,
+                "overview": item.overview,
+                "poster_path": item.poster_path,
+            }
+            for item in draft.candidates
+        ],
+        "selected_tmdb_id": draft.selected_tmdb_id,
+        "presets": [{"code": item.code, "name": item.name} for item in draft.presets],
+        "preset_code": draft.preset_code,
+        "cleanup_on_success": draft.cleanup_on_success,
+        "sub_ita": draft.sub_ita,
+        "taskflow_package_ids": list(draft.taskflow_package_ids),
+        "workflow_id": draft.workflow_id,
+        "error": draft.error,
     }
 
 
@@ -162,6 +197,34 @@ def _decode_session(raw: dict[str, Any]) -> ImportSession:
         EditorialHint(title=str(hint_raw["title"]), year=int(hint_raw["year"]))
         if hint_raw is not None
         else None
+    )
+    quick_raw = raw.get("quick")
+    quick = None if quick_raw is None else QuickWorkflowDraft(
+        stage=QuickStage(quick_raw["stage"]),
+        media_kind=quick_raw.get("media_kind"),
+        query_title=quick_raw.get("query_title"),
+        query_year=(int(quick_raw["query_year"]) if quick_raw.get("query_year") is not None else None),
+        candidates=tuple(
+            TmdbCandidate(
+                int(item["tmdb_id"]), str(item["title"]), str(item["original_title"]),
+                int(item["year"]), str(item["overview"]), item.get("poster_path"),
+            )
+            for item in quick_raw.get("candidates", [])
+        ),
+        selected_tmdb_id=(
+            int(quick_raw["selected_tmdb_id"])
+            if quick_raw.get("selected_tmdb_id") is not None else None
+        ),
+        presets=tuple(
+            WorkflowPreset(str(item["code"]), str(item["name"]))
+            for item in quick_raw.get("presets", [])
+        ),
+        preset_code=quick_raw.get("preset_code"),
+        cleanup_on_success=bool(quick_raw.get("cleanup_on_success", False)),
+        sub_ita=bool(quick_raw.get("sub_ita", False)),
+        taskflow_package_ids=tuple(str(value) for value in quick_raw.get("taskflow_package_ids", [])),
+        workflow_id=quick_raw.get("workflow_id"),
+        error=quick_raw.get("error"),
     )
     return ImportSession(
         session_id=str(raw["session_id"]),
@@ -193,4 +256,6 @@ def _decode_session(raw: dict[str, Any]) -> ImportSession:
         editorial_hint=hint,
         metadata_confirmed=bool(raw.get("metadata_confirmed", False)),
         published_paths=tuple(Path(value) for value in raw["published_paths"]),
+        mode=ImportMode(raw["mode"]) if raw.get("mode") is not None else None,
+        quick=quick,
     )

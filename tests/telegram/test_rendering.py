@@ -5,6 +5,7 @@ from taskflow_telegram_importer.sessions import (
     EditorialHint,
     FileState,
     ImportFile,
+    ImportMode,
     ImportSession,
     SessionState,
 )
@@ -41,24 +42,27 @@ def test_collecting_status_shows_concurrent_counts_and_finish_action() -> None:
     assert ("Escludi two.mkv", "exclude:abc123:2") in rendered.buttons
 
 
-def test_sealed_status_offers_confirm_edit_and_cancel() -> None:
+def test_sealed_status_offers_manual_and_quick_branches() -> None:
     rendered = render_session(_session(SessionState.SEALED))
 
     assert "Cape Fear (2025)" in rendered.text
-    assert ("Conferma e pubblica", "confirm:abc123") in rendered.buttons
-    assert ("Modifica", "edit:abc123") in rendered.buttons
+    assert ("Finalizza con WebUI TaskFlow", "manual:abc123") in rendered.buttons
+    assert ("Quick Workflow", "quick:abc123") in rendered.buttons
     assert ("Annulla", "delete-request:abc123") in rendered.buttons
 
 
 def test_confirmed_sealed_status_hides_confirmation_actions() -> None:
     rendered = render_session(
-        _session(SessionState.SEALED, metadata_confirmed=True)
+        replace(
+            _session(SessionState.SEALED, metadata_confirmed=True),
+            mode=ImportMode.MANUAL,
+        )
     )
 
     assert "Dati confermati" in rendered.text
     assert "Download in corso" in rendered.text
-    assert ("Conferma e pubblica", "confirm:abc123") not in rendered.buttons
-    assert ("Modifica", "edit:abc123") not in rendered.buttons
+    assert ("Finalizza con WebUI TaskFlow", "manual:abc123") not in rendered.buttons
+    assert ("Quick Workflow", "quick:abc123") not in rendered.buttons
     assert ("Riprova two.mkv", "retry:abc123:2") in rendered.buttons
     assert ("Escludi two.mkv", "exclude:abc123:2") in rendered.buttons
     assert ("Annulla", "delete-request:abc123") in rendered.buttons
