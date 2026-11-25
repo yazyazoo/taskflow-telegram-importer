@@ -7,9 +7,9 @@ downloads. Confirm or edit the proposed title/year. Complete files are then
 published atomically to the TaskFlow filesystem gate.
 
 The service keeps one collecting session per operator and permits multiple
-sealed/downloading sessions. JSON manifests under staging retain Telegram file
-IDs and exact owned paths. Restart recovery leaves complete files untouched
-and restarts only incomplete acquisitions.
+sealed/downloading sessions. JSON manifests under staging retain Telegram
+message IDs, progress, and exact owned paths. Restart recovery leaves complete
+files untouched and restarts only incomplete acquisitions.
 
 For a failed file, use retry or exclude. Deleting an entire session first
 cancels active jobs, then removes only manifest-recorded staging and published
@@ -24,5 +24,7 @@ Internal levels are:
 - `WARNING`: recovered or degraded outcomes;
 - `ERROR`: terminal file/session failures.
 
-Tokens and Telegram application credentials are always redacted. Phase one
-does not extract 7z archives and does not create TaskFlow workflows.
+The status panel lists every active, queued, complete, failed, or excluded
+file. Active transfers show bytes, percentage, speed, and ETA at the configured
+refresh interval. Credentials are always redacted from logs. The importer does
+not extract 7z archives yet and does not create TaskFlow workflows.

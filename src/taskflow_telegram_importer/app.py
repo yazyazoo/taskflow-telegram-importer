@@ -8,82 +8,49 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
-from telegram import Bot
-from telegram.ext import Application
-
-from taskflow_telegram_importer.config import load_settings, resolve_secret
+from taskflow_telegram_importer.config import load_settings
 from taskflow_telegram_importer.downloads import DownloadCoordinator
-from taskflow_telegram_importer.errors import ImporterError
 from taskflow_telegram_importer.imports import ImportService
 from taskflow_telegram_importer.logging import LoggingController, configure_logging
-from taskflow_telegram_importer.publisher import FilesystemPublisher
 from taskflow_telegram_importer.processors import VideoProcessor
+from taskflow_telegram_importer.publisher import FilesystemPublisher
 from taskflow_telegram_importer.sessions import SessionRepository
-from taskflow_telegram_importer.telegram import build_application
+from taskflow_telegram_importer.telegram import (
+    TelegramHandlers,
+    TelethonFileSource,
+    TelethonGateway,
+    build_client,
+)
 
 _LOGGER = logging.getLogger("taskflow_telegram_importer.runtime")
 
 
-class LateBoundTelegramSource:
-    def __init__(self) -> None:
-        self._bot: Bot | None = None
-
-    def bind(self, bot: Bot) -> None:
-        self._bot = bot
-
-    async def get_local_file(self, file_id: str) -> Path:
-        if self._bot is None:
-            raise ImporterError("Telegram source is not bound")
-        telegram_file = await self._bot.get_file(file_id)
-        if not telegram_file.file_path:
-            raise ImporterError("local Bot API returned no file path")
-        path = Path(telegram_file.file_path)
-        if not path.is_absolute() or path.is_symlink() or not path.is_file():
-            raise ImporterError("local Bot API returned an unsafe file path")
-        return path
-
-
 @dataclass(slots=True)
 class Runtime:
-    application: Application
+    gateway: TelethonGateway
     coordinator: DownloadCoordinator
     publisher: FilesystemPublisher
-    long_poll_timeout: float
     logging_controller: LoggingController | None = None
     recoverer: Callable[[], None] | None = None
-    _initialized: bool = False
     _started: bool = False
-    _polling: bool = False
 
     async def start(self) -> None:
         self.publisher.preflight()
-        await self.application.initialize()
-        self._initialized = True
-        await self.application.start()
+        await self.gateway.start()
         self._started = True
         self.coordinator.recover()
         if self.recoverer is not None:
             self.recoverer()
-        if self.application.updater is None:
-            raise RuntimeError("Telegram application has no updater")
-        await self.application.updater.start_polling(timeout=self.long_poll_timeout)
-        self._polling = True
         _LOGGER.info("runtime started")
 
     async def shutdown(self) -> None:
         try:
-            if self._polling and self.application.updater is not None:
-                await self.application.updater.stop()
             try:
-                await self.coordinator.shutdown()
+                await self.gateway.stop()
             finally:
-                try:
-                    if self._started:
-                        await self.application.stop()
-                finally:
-                    if self._initialized:
-                        await self.application.shutdown()
+                await self.coordinator.shutdown()
         finally:
+            self._started = False
             if self.logging_controller is not None:
                 self.logging_controller.close()
 
@@ -97,9 +64,11 @@ class Runtime:
 
 def compose(project_root: Path) -> Runtime:
     settings = load_settings(project_root)
-    token = resolve_secret(settings.telegram.token_command)
+    telegram = settings.telegram
     logging_controller = configure_logging(
-        settings.logging.level, settings.paths.log_file, secrets=(token,)
+        settings.logging.level,
+        settings.paths.log_file,
+        secrets=(str(telegram.api_id), telegram.api_hash, telegram.bot_token),
     )
     try:
         publisher = FilesystemPublisher(
@@ -108,18 +77,44 @@ def compose(project_root: Path) -> Runtime:
             settings.files.minimum_free_gib,
         )
         repository = SessionRepository(settings.paths.staging / ".sessions")
-        source = LateBoundTelegramSource()
-        coordinator = DownloadCoordinator(repository, publisher, source)
-        processor = VideoProcessor(settings.files.allowed_extensions, settings.paths.staging)
-        service = ImportService(repository, coordinator, publisher, processor=processor)
-        coordinator.set_terminal_callback(service.file_terminal)
-        application = build_application(settings, service, token=token)
-        source.bind(application.bot)
+        client = build_client(
+            session_path=telegram.session_path,
+            api_id=telegram.api_id,
+            api_hash=telegram.api_hash,
+        )
+        source = TelethonFileSource(client)
+        coordinator = DownloadCoordinator(
+            repository,
+            publisher,
+            source,
+            max_concurrent_downloads=telegram.max_concurrent_downloads,
+            progress_refresh_seconds=telegram.progress_refresh_seconds,
+        )
+        processor = VideoProcessor(
+            settings.files.allowed_extensions, settings.paths.staging
+        )
+        service = ImportService(
+            repository, coordinator, publisher, processor=processor
+        )
+        coordinator.set_change_callback(service.file_changed)
+        handlers = TelegramHandlers(
+            service,
+            client,
+            telegram.allowed_user_ids,
+            settings.files.allowed_extensions,
+            taskflow_webui_url=settings.taskflow.webui_url,
+            refresh_seconds=round(telegram.progress_refresh_seconds),
+        )
+        gateway = TelethonGateway(
+            client,
+            handlers,
+            bot_token=telegram.bot_token,
+            session_path=telegram.session_path,
+        )
         return Runtime(
-            application,
+            gateway,
             coordinator,
             publisher,
-            settings.telegram.long_poll_request_timeout_seconds,
             logging_controller,
             service.recover,
         )

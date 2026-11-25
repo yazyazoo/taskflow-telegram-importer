@@ -5,5 +5,11 @@ from typing import Protocol
 
 
 class TelegramFileSource(Protocol):
-    async def get_local_file(self, file_id: str) -> Path:
-        """Return the regular local Bot API path for one Telegram file."""
+    async def download(
+        self,
+        chat_id: int,
+        message_id: int,
+        target: Path,
+        progress_callback,
+    ) -> Path:
+        """Download one Telegram message directly to the requested staging path."""

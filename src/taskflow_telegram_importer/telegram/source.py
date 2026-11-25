@@ -2,20 +2,28 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from telegram import Bot
-
 from taskflow_telegram_importer.errors import ImporterError
 
 
-class TelegramFileSource:
-    def __init__(self, bot: Bot) -> None:
-        self._bot = bot
+class TelethonFileSource:
+    def __init__(self, client) -> None:
+        self._client = client
 
-    async def get_local_file(self, file_id: str) -> Path:
-        telegram_file = await self._bot.get_file(file_id)
-        if not telegram_file.file_path:
-            raise ImporterError("local Bot API returned no file path")
-        path = Path(telegram_file.file_path)
-        if not path.is_absolute() or path.is_symlink() or not path.is_file():
-            raise ImporterError("local Bot API returned an unsafe file path")
-        return path
+    async def download(
+        self,
+        chat_id: int,
+        message_id: int,
+        target: Path,
+        progress_callback,
+    ) -> Path:
+        message = await self._client.get_messages(chat_id, ids=message_id)
+        if message is None:
+            raise ImporterError("Telegram message is no longer available")
+        result = await self._client.download_media(
+            message,
+            file=str(target),
+            progress_callback=progress_callback,
+        )
+        if result is None or Path(result) != target:
+            raise ImporterError("Telegram download did not produce the requested file")
+        return target

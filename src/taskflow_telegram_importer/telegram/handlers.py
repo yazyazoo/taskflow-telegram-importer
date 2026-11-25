@@ -2,22 +2,13 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
-from telegram.constants import ChatType
-from telegram.ext import (
-    Application,
-    ApplicationBuilder,
-    CallbackQueryHandler,
-    ContextTypes,
-    MessageHandler,
-    filters,
-)
+from telethon import Button
 
-from taskflow_telegram_importer.config import Settings, resolve_secret
 from taskflow_telegram_importer.errors import ImporterError
 from taskflow_telegram_importer.imports import ImportService
-from taskflow_telegram_importer.sessions import SessionState
+from taskflow_telegram_importer.sessions import FileState, SessionState
 
+from .messages import operator_error_message
 from .rendering import RenderedStatus, render_session
 
 
@@ -25,65 +16,80 @@ class TelegramHandlers:
     def __init__(
         self,
         service: ImportService,
+        client,
         allowed_user_ids: tuple[int, ...],
         allowed_extensions: tuple[str, ...],
+        *,
+        taskflow_webui_url: str,
+        refresh_seconds: int,
     ) -> None:
         self._service = service
+        self._client = client
         self._allowed_users = frozenset(allowed_user_ids)
         self._extensions = frozenset(value.lower() for value in allowed_extensions)
+        self._taskflow_webui_url = taskflow_webui_url
+        self._refresh_seconds = refresh_seconds
         self._status_messages: dict[int, tuple[int, int]] = {}
-        self._bots = {}
         self._editing: dict[int, str] = {}
-        if hasattr(service, "add_listener"):
-            service.add_listener(self.session_changed)
+        self._terminal_notifications: set[tuple[str, str]] = set()
+        service.add_listener(self.session_changed)
 
-    async def handle_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        if not self._authorized(update):
+    async def handle_message(self, event) -> None:
+        if not self._authorized(event):
             return
-        user_id = update.effective_user.id
-        self._bots[user_id] = context.bot
-        chat_id = update.effective_chat.id
-        message = update.effective_message
+        user_id = int(event.sender_id)
+        chat_id = int(event.chat_id)
+        message = event.message
+        text = (getattr(message, "text", None) or "").strip()
 
-        if user_id in self._editing and message.text:
-            await self._handle_metadata_text(user_id, message.text, update, context)
+        if text == "/taskflow":
+            await self._client.send_message(
+                chat_id,
+                "Apri TaskFlow dal telefono.",
+                buttons=[[Button.url("Apri TaskFlow WebUI", self._taskflow_webui_url)]],
+            )
             return
 
-        media = message.document or message.video
+        if user_id in self._editing and text:
+            await self._handle_metadata_text(user_id, chat_id, text)
+            return
+
+        media_file = getattr(message, "file", None)
+        caption = getattr(message, "raw_text", None) or ""
         try:
-            if media is not None:
-                filename = getattr(media, "file_name", None)
+            if media_file is not None:
+                filename = getattr(media_file, "name", None)
                 if not filename or Path(filename).suffix.lower() not in self._extensions:
-                    await message.reply_text("File ignorato: filename o estensione non supportati.")
+                    await self._client.send_message(
+                        chat_id,
+                        "File ignorato: nome o estensione non supportati.",
+                    )
                     return
                 session = self._service.receive_video(
                     chat_id=chat_id,
                     user_id=user_id,
-                    message_id=message.message_id,
-                    file_id=media.file_id,
-                    file_unique_id=media.file_unique_id,
+                    message_id=int(message.id),
                     filename=filename,
-                    expected_size=int(media.file_size or 0),
-                    caption=message.caption,
+                    expected_size=int(getattr(media_file, "size", 0) or 0),
+                    caption=caption,
                 )
-            elif message.photo and message.caption:
+            elif getattr(message, "photo", None) is not None and caption:
                 session = self._service.receive_descriptor(
-                    chat_id, user_id, message.message_id, message.caption
+                    chat_id, user_id, int(message.id), caption
                 )
             else:
                 return
-            await self._show_status(update, context, session)
+            await self._show_status(user_id, chat_id, session)
         except ImporterError as exc:
-            await message.reply_text(str(exc))
+            await self._client.send_message(chat_id, operator_error_message(exc))
 
-    async def handle_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        if not self._authorized(update) or update.callback_query is None:
+    async def handle_callback(self, event) -> None:
+        if not self._authorized(event):
             return
-        query = update.callback_query
-        self._bots[update.effective_user.id] = context.bot
-        await query.answer()
-        data = query.data or ""
-        user_id = update.effective_user.id
+        await event.answer()
+        data = bytes(event.data or b"").decode("utf-8", errors="strict")
+        user_id = int(event.sender_id)
+        chat_id = int(event.chat_id)
         try:
             action, session_id, *tail = data.split(":")
             selected = self._service.get(session_id, user_id)
@@ -93,118 +99,130 @@ class TelegramHandlers:
                 session = self._service.finish_collection(user_id)
                 if session.session_id != session_id:
                     raise ImporterError("stale finish action")
+            elif action == "confirm":
+                session = self._service.confirm_metadata(session_id, user_id)
+            elif action == "edit":
+                self._editing[user_id] = session_id
+                await self._client.send_message(chat_id, "Invia: Titolo | Anno")
+                return
+            elif action == "retry":
+                self._service.retry_file(session_id, user_id, int(tail[0]))
+                session = self._service.get(session_id, user_id)
+            elif action == "exclude":
+                session = await self._service.exclude_file(
+                    session_id, user_id, int(tail[0])
+                )
+            elif action == "delete-request":
+                await self._show_status(
+                    user_id, chat_id, selected, confirm_delete=True
+                )
+                return
+            elif action == "delete-confirm":
+                await self._service.delete_session(session_id, user_id)
+                await event.edit("Sessione eliminata.", buttons=None)
+                self._status_messages.pop(user_id, None)
+                return
+            elif action == "show":
+                session = selected
             else:
-                if action == "confirm":
-                    session = self._service.confirm_metadata(session_id, user_id)
-                elif action == "edit":
-                    self._editing[user_id] = session_id
-                    await query.message.reply_text("Invia: Titolo | Anno")
-                    return
-                elif action == "retry":
-                    self._service.retry_file(session_id, user_id, int(tail[0]))
-                    session = self._service.get(session_id, user_id)
-                elif action == "exclude":
-                    session = await self._service.exclude_file(
-                        session_id, user_id, int(tail[0])
-                    )
-                elif action == "delete-request":
-                    session = self._service.get(session_id, user_id)
-                    await self._show_status(update, context, session, confirm_delete=True)
-                    return
-                elif action == "delete-confirm":
-                    await self._service.delete_session(session_id, user_id)
-                    await query.edit_message_text("Sessione eliminata.")
-                    self._status_messages.pop(user_id, None)
-                    return
-                elif action == "show":
-                    session = self._service.get(session_id, user_id)
-                else:
-                    return
-            await self._show_status(update, context, session)
-        except (ImporterError, ValueError) as exc:
-            await query.message.reply_text(str(exc))
+                return
+            await self._show_status(user_id, chat_id, session)
+        except (ImporterError, ValueError, IndexError, UnicodeError) as exc:
+            await self._client.send_message(chat_id, operator_error_message(exc))
 
     async def session_changed(self, session) -> None:
         current = self._status_messages.get(session.user_id)
-        bot = self._bots.get(session.user_id)
-        if current is None or bot is None:
+        if current is None:
             return
-        rendered = render_session(session)
-        await bot.edit_message_text(
-            chat_id=current[0],
-            message_id=current[1],
-            text=rendered.text,
-            reply_markup=_markup(rendered),
+        rendered = render_session(session, refresh_seconds=self._refresh_seconds)
+        await self._client.edit_message(
+            current[0], current[1], rendered.text, buttons=_buttons(rendered)
         )
+        await self._notify_terminal_state(session)
 
-    async def _handle_metadata_text(self, user_id, text, update, context) -> None:
+    async def _handle_metadata_text(
+        self, user_id: int, chat_id: int, text: str
+    ) -> None:
         try:
             title, year_text = (part.strip() for part in text.rsplit("|", 1))
             session_id = self._editing[user_id]
-            session = self._service.edit_metadata(session_id, user_id, title, int(year_text))
+            session = self._service.edit_metadata(
+                session_id, user_id, title, int(year_text)
+            )
             self._editing.pop(user_id, None)
-            await self._show_status(update, context, session)
+            await self._delete_previous_status(user_id)
+            await self._client.send_message(chat_id, "Titolo e anno aggiornati.")
+            await self._show_status(user_id, chat_id, session)
         except (ValueError, ImporterError):
-            await update.effective_message.reply_text("Formato non valido. Usa: Titolo | Anno")
+            await self._client.send_message(
+                chat_id, "Formato non valido. Usa: Titolo | Anno"
+            )
+
+    async def _delete_previous_status(self, user_id: int) -> None:
+        current = self._status_messages.pop(user_id, None)
+        if current is None:
+            return
+        try:
+            await self._client.delete_messages(current[0], [current[1]])
+        except Exception:
+            pass
 
     async def _show_status(
-        self, update, context, session, *, confirm_delete: bool = False
+        self,
+        user_id: int,
+        chat_id: int,
+        session,
+        *,
+        confirm_delete: bool = False,
     ) -> None:
-        rendered = render_session(session, confirm_delete=confirm_delete)
-        markup = _markup(rendered)
-        user_id = update.effective_user.id
+        rendered = render_session(
+            session,
+            confirm_delete=confirm_delete,
+            refresh_seconds=self._refresh_seconds,
+        )
         current = self._status_messages.get(user_id)
         if current is not None:
             try:
-                await context.bot.edit_message_text(
-                    chat_id=current[0],
-                    message_id=current[1],
-                    text=rendered.text,
-                    reply_markup=markup,
+                await self._client.edit_message(
+                    current[0], current[1], rendered.text, buttons=_buttons(rendered)
                 )
                 return
             except Exception:
                 self._status_messages.pop(user_id, None)
-        sent = await update.effective_message.reply_text(rendered.text, reply_markup=markup)
-        self._status_messages[user_id] = (update.effective_chat.id, sent.message_id)
+        sent = await self._client.send_message(
+            chat_id, rendered.text, buttons=_buttons(rendered)
+        )
+        self._status_messages[user_id] = (chat_id, int(sent.id))
 
-    def _authorized(self, update: Update) -> bool:
+    async def _notify_terminal_state(self, session) -> None:
+        failed = tuple(
+            item.message_id for item in session.files if item.state is FileState.FAILED
+        )
+        if session.state is SessionState.PUBLISHED:
+            key = (session.session_id, "published")
+            message = f"Sessione {session.session_id}: pubblicazione completata."
+        elif failed:
+            key = (session.session_id, "failed:" + ",".join(map(str, failed)))
+            message = f"Sessione {session.session_id}: uno o piu download sono falliti."
+        else:
+            return
+        if key in self._terminal_notifications:
+            return
+        self._terminal_notifications.add(key)
+        await self._client.send_message(session.chat_id, message)
+
+    def _authorized(self, event) -> bool:
         return bool(
-            update.effective_user
-            and update.effective_chat
-            and update.effective_chat.type == ChatType.PRIVATE
-            and update.effective_user.id in self._allowed_users
+            event.is_private
+            and event.sender_id is not None
+            and int(event.sender_id) in self._allowed_users
         )
 
 
-def build_application(
-    settings: Settings,
-    service: ImportService,
-    *,
-    token: str | None = None,
-) -> Application:
-    resolved_token = token or resolve_secret(settings.telegram.token_command)
-    application = (
-        ApplicationBuilder()
-        .token(resolved_token)
-        .base_url(settings.telegram.api_base_url)
-        .local_mode(settings.telegram.local_mode)
-        .concurrent_updates(False)
-        .build()
-    )
-    handlers = TelegramHandlers(
-        service,
-        settings.telegram.allowed_user_ids,
-        settings.files.allowed_extensions,
-    )
-    application.add_handler(CallbackQueryHandler(handlers.handle_callback))
-    application.add_handler(MessageHandler(filters.ALL, handlers.handle_message))
-    return application
-
-
-def _markup(rendered: RenderedStatus) -> InlineKeyboardMarkup | None:
+def _buttons(rendered: RenderedStatus):
     if not rendered.buttons:
         return None
-    return InlineKeyboardMarkup(
-        [[InlineKeyboardButton(label, callback_data=data)] for label, data in rendered.buttons]
-    )
+    return [
+        [Button.inline(label, data.encode("utf-8"))]
+        for label, data in rendered.buttons
+    ]

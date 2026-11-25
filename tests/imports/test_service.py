@@ -50,8 +50,6 @@ def _receive(service: ImportService, message_id: int = 1):
         chat_id=20,
         user_id=10,
         message_id=message_id,
-        file_id=f"file-{message_id}",
-        file_unique_id=f"unique-{message_id}",
         filename=f"episode-{message_id}.mkv",
         expected_size=5,
         caption="Cape Fear (2025)" if message_id == 1 else None,
@@ -182,7 +180,7 @@ def test_reconcile_recovers_commit_lost_after_atomic_rename(tmp_path: Path) -> N
 
 
 @pytest.mark.asyncio
-async def test_terminal_change_notifies_registered_listener(tmp_path: Path) -> None:
+async def test_file_change_notifies_registered_listener(tmp_path: Path) -> None:
     service, _, _, _ = _service(tmp_path)
     snapshot = _receive(service)
     seen = []
@@ -191,7 +189,7 @@ async def test_terminal_change_notifies_registered_listener(tmp_path: Path) -> N
         seen.append(session.session_id)
 
     service.add_listener(listener)
-    await service.file_terminal(snapshot.session_id)
+    await service.file_changed(snapshot.session_id)
 
     assert seen == [snapshot.session_id]
 

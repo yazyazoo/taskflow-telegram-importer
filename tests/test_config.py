@@ -1,33 +1,25 @@
 from __future__ import annotations
 
-import logging
-import os
 from pathlib import Path
 
 import pytest
 import yaml
 
-from taskflow_telegram_importer.config import (
-    ConfigError,
-    SecretCommand,
-    load_settings,
-    resolve_secret,
-)
+from taskflow_telegram_importer.config import ConfigError, load_settings
 
 
 def _valid_config(tmp_path: Path) -> dict[str, object]:
     return {
         "telegram": {
-            "api_base_url": "http://127.0.0.1:8081/bot",
-            "local_mode": True,
-            "long_poll_request_timeout_seconds": 30,
+            "api_id": 123456,
+            "api_hash": "telegram-api-hash",
+            "bot_token": "123456:telegram-bot-token",
+            "session_path": str(tmp_path / "state" / "telegram-importer"),
+            "progress_refresh_seconds": 30,
+            "max_concurrent_downloads": 2,
             "allowed_user_ids": [123456789, 987654321],
-            "token_command": {
-                "executable": "/mnt/shared/Personal/bin/rp-secret",
-                "alias": "taskflow_telegram_importer",
-                "field": "token",
-            },
         },
+        "taskflow": {"webui_url": "https://taskflow.redprimrose.mov/ui/"},
         "paths": {
             "staging": str(tmp_path / "staging"),
             "gate": str(tmp_path / "gate"),
@@ -53,7 +45,13 @@ def test_load_settings_normalizes_complete_configuration(tmp_path: Path) -> None
     settings = load_settings(tmp_path)
 
     assert settings.telegram.allowed_user_ids == (123456789, 987654321)
-    assert settings.telegram.long_poll_request_timeout_seconds == 30
+    assert settings.telegram.api_id == 123456
+    assert settings.telegram.api_hash == "telegram-api-hash"
+    assert settings.telegram.bot_token == "123456:telegram-bot-token"
+    assert settings.telegram.session_path == (tmp_path / "state" / "telegram-importer").resolve()
+    assert settings.telegram.progress_refresh_seconds == 30
+    assert settings.telegram.max_concurrent_downloads == 2
+    assert settings.taskflow.webui_url == "https://taskflow.redprimrose.mov/ui/"
     assert settings.files.allowed_extensions == (".mkv", ".mp4", ".avi")
     assert settings.files.minimum_free_gib == 12.5
     assert settings.paths.staging == (tmp_path / "staging").resolve()
@@ -123,9 +121,12 @@ def test_load_settings_rejects_gate_parent_of_staging(tmp_path: Path) -> None:
         ("telegram", "allowed_user_ids", [0], "user ID"),
         ("telegram", "allowed_user_ids", [True], "user ID"),
         ("telegram", "allowed_user_ids", ["123"], "user ID"),
-        ("telegram", "long_poll_request_timeout_seconds", 0, "timeout"),
-        ("telegram", "long_poll_request_timeout_seconds", -5, "timeout"),
-        ("telegram", "local_mode", False, "local_mode"),
+        ("telegram", "api_id", 0, "api_id"),
+        ("telegram", "api_id", "123", "api_id"),
+        ("telegram", "progress_refresh_seconds", 0, "progress_refresh_seconds"),
+        ("telegram", "progress_refresh_seconds", -5, "progress_refresh_seconds"),
+        ("telegram", "max_concurrent_downloads", 0, "max_concurrent_downloads"),
+        ("telegram", "max_concurrent_downloads", 1.5, "max_concurrent_downloads"),
         ("logging", "level", "TRACE", "logging level"),
     ],
 )
@@ -138,45 +139,6 @@ def test_load_settings_rejects_invalid_values(
 
     with pytest.raises(ConfigError, match=match):
         load_settings(tmp_path)
-
-
-def _write_executable(tmp_path: Path, body: str) -> Path:
-    path = tmp_path / "secret-command"
-    path.write_text(f"#!/bin/sh\n{body}\n", encoding="utf-8")
-    path.chmod(0o700)
-    return path
-
-
-def test_resolve_secret_executes_direct_arguments_and_trims_output(tmp_path: Path) -> None:
-    executable = _write_executable(
-        tmp_path,
-        '[ "$1" = "alias-name" ] && [ "$2" = "token" ] || exit 7\nprintf "resolved-secret\\n"',
-    )
-
-    result = resolve_secret(SecretCommand(executable, "alias-name", "token"))
-
-    assert result == "resolved-secret"
-
-
-@pytest.mark.parametrize(
-    "body",
-    [
-        'printf "super-secret" >&2; exit 9',
-        'printf ""',
-        'printf "\\n\\n"',
-    ],
-)
-def test_resolve_secret_rejects_failure_or_empty_output_without_leaking(
-    tmp_path: Path, body: str, caplog: pytest.LogCaptureFixture
-) -> None:
-    executable = _write_executable(tmp_path, body)
-    caplog.set_level(logging.DEBUG)
-
-    with pytest.raises(ConfigError) as raised:
-        resolve_secret(SecretCommand(executable, "alias-name", "token"))
-
-    combined = f"{raised.value}\n{caplog.text}"
-    assert "super-secret" not in combined
 
 
 def test_load_repository_example(tmp_path: Path) -> None:

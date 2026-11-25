@@ -1,12 +1,14 @@
 telegram:
-  api_base_url: "http://127.0.0.1:8081/bot"
-  local_mode: true
-  long_poll_request_timeout_seconds: 30
+  api_id: 12345678
+  api_hash: "replace-with-telegram-api-hash"
+  bot_token: "replace-with-botfather-token"
+  session_path: "/mnt/shared/customprograms/taskflow-telegram-importer/state/importer"
+  progress_refresh_seconds: 30
+  max_concurrent_downloads: 2
   allowed_user_ids: []
-  token_command:
-    executable: "/mnt/shared/Personal/bin/rp-secret"
-    alias: "taskflow_telegram_importer"
-    field: "token"
+
+taskflow:
+  webui_url: "https://taskflow.example.com/ui/telegram-ui/"
 
 paths:
   staging: "/mnt/shared/DOWNLOADS/TaskFlow/telegram_staging"

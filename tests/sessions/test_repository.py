@@ -19,8 +19,6 @@ from taskflow_telegram_importer.sessions import (
 def _file(message_id: int = 10) -> ImportFile:
     return ImportFile(
         message_id=message_id,
-        file_id=f"file-{message_id}",
-        file_unique_id=f"unique-{message_id}",
         filename=f"episode-{message_id}.mkv",
         expected_size=123456789012,
         state=FileState.RECEIVED,

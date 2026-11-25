@@ -1,4 +1,10 @@
-from .handlers import TelegramHandlers, build_application
-from .source import TelegramFileSource
+from .client import TelethonGateway, build_client
+from .handlers import TelegramHandlers
+from .source import TelethonFileSource
 
-__all__ = ["TelegramFileSource", "TelegramHandlers", "build_application"]
+__all__ = [
+    "TelegramHandlers",
+    "TelethonFileSource",
+    "TelethonGateway",
+    "build_client",
+]

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping
@@ -11,19 +10,14 @@ from .errors import ConfigError
 
 
 @dataclass(frozen=True, slots=True)
-class SecretCommand:
-    executable: Path
-    alias: str
-    field: str
-
-
-@dataclass(frozen=True, slots=True)
 class TelegramSettings:
-    api_base_url: str
-    local_mode: bool
-    long_poll_request_timeout_seconds: float
+    api_id: int
+    api_hash: str
+    bot_token: str
+    session_path: Path
+    progress_refresh_seconds: float
+    max_concurrent_downloads: int
     allowed_user_ids: tuple[int, ...]
-    token_command: SecretCommand
 
 
 @dataclass(frozen=True, slots=True)
@@ -45,26 +39,34 @@ class LoggingSettings:
 
 
 @dataclass(frozen=True, slots=True)
+class TaskFlowSettings:
+    webui_url: str
+
+
+@dataclass(frozen=True, slots=True)
 class Settings:
     telegram: TelegramSettings
+    taskflow: TaskFlowSettings
     paths: PathSettings
     files: FileSettings
     logging: LoggingSettings
 
 
-_ROOT_KEYS = {"telegram", "paths", "files", "logging"}
+_ROOT_KEYS = {"telegram", "taskflow", "paths", "files", "logging"}
 _TELEGRAM_KEYS = {
-    "api_base_url",
-    "local_mode",
-    "long_poll_request_timeout_seconds",
+    "api_id",
+    "api_hash",
+    "bot_token",
+    "session_path",
+    "progress_refresh_seconds",
+    "max_concurrent_downloads",
     "allowed_user_ids",
-    "token_command",
 }
-_SECRET_KEYS = {"executable", "alias", "field"}
 _PATH_KEYS = {"staging", "gate", "log_file"}
 _FILE_KEYS = {"allowed_extensions", "minimum_free_gib"}
 _LOGGING_KEYS = {"level"}
 _LOG_LEVELS = {"DEBUG", "INFO", "WARNING", "ERROR"}
+_TASKFLOW_KEYS = {"webui_url"}
 
 
 def load_settings(project_root: Path) -> Settings:
@@ -81,8 +83,8 @@ def load_settings(project_root: Path) -> Settings:
 
     telegram_raw = _mapping(root["telegram"], "telegram")
     _require_exact_keys(telegram_raw, _TELEGRAM_KEYS, "telegram")
-    secret_raw = _mapping(telegram_raw["token_command"], "telegram.token_command")
-    _require_exact_keys(secret_raw, _SECRET_KEYS, "telegram.token_command")
+    taskflow_raw = _mapping(root["taskflow"], "taskflow")
+    _require_exact_keys(taskflow_raw, _TASKFLOW_KEYS, "taskflow")
 
     paths_raw = _mapping(root["paths"], "paths")
     _require_exact_keys(paths_raw, _PATH_KEYS, "paths")
@@ -91,21 +93,18 @@ def load_settings(project_root: Path) -> Settings:
     logging_raw = _mapping(root["logging"], "logging")
     _require_exact_keys(logging_raw, _LOGGING_KEYS, "logging")
 
-    local_mode = _boolean(telegram_raw["local_mode"], "local_mode")
-    if not local_mode:
-        raise ConfigError("local_mode must be true for local filesystem downloads")
     telegram = TelegramSettings(
-        api_base_url=_nonempty_string(telegram_raw["api_base_url"], "api_base_url"),
-        local_mode=local_mode,
-        long_poll_request_timeout_seconds=_positive_number(
-            telegram_raw["long_poll_request_timeout_seconds"], "timeout"
+        api_id=_positive_integer(telegram_raw["api_id"], "api_id"),
+        api_hash=_nonempty_string(telegram_raw["api_hash"], "api_hash"),
+        bot_token=_nonempty_string(telegram_raw["bot_token"], "bot_token"),
+        session_path=_absolute_path(telegram_raw["session_path"], "session_path"),
+        progress_refresh_seconds=_positive_number(
+            telegram_raw["progress_refresh_seconds"], "progress_refresh_seconds"
+        ),
+        max_concurrent_downloads=_positive_integer(
+            telegram_raw["max_concurrent_downloads"], "max_concurrent_downloads"
         ),
         allowed_user_ids=_user_ids(telegram_raw["allowed_user_ids"]),
-        token_command=SecretCommand(
-            executable=_absolute_path(secret_raw["executable"], "secret executable"),
-            alias=_nonempty_string(secret_raw["alias"], "secret alias"),
-            field=_nonempty_string(secret_raw["field"], "secret field"),
-        ),
     )
 
     paths = PathSettings(
@@ -125,6 +124,9 @@ def load_settings(project_root: Path) -> Settings:
 
     return Settings(
         telegram=telegram,
+        taskflow=TaskFlowSettings(
+            webui_url=_https_url(taskflow_raw["webui_url"], "taskflow.webui_url")
+        ),
         paths=paths,
         files=FileSettings(
             allowed_extensions=_extensions(files_raw["allowed_extensions"]),
@@ -132,26 +134,6 @@ def load_settings(project_root: Path) -> Settings:
         ),
         logging=LoggingSettings(level=level),
     )
-
-
-def resolve_secret(command: SecretCommand) -> str:
-    try:
-        result = subprocess.run(
-            [str(command.executable), command.alias, command.field],
-            check=False,
-            capture_output=True,
-            text=True,
-            shell=False,
-        )
-    except OSError as exc:
-        raise ConfigError("secret command could not be executed") from exc
-
-    if result.returncode != 0:
-        raise ConfigError("secret command failed")
-    value = result.stdout.rstrip("\r\n")
-    if not value:
-        raise ConfigError("secret command returned an empty value")
-    return value
 
 
 def _mapping(value: Any, name: str) -> Mapping[str, Any]:
@@ -177,10 +159,11 @@ def _nonempty_string(value: Any, name: str) -> str:
     return value.strip()
 
 
-def _boolean(value: Any, name: str) -> bool:
-    if not isinstance(value, bool):
-        raise ConfigError(f"{name} must be boolean")
-    return value
+def _https_url(value: Any, name: str) -> str:
+    text = _nonempty_string(value, name)
+    if not text.startswith("https://"):
+        raise ConfigError(f"{name} must be an HTTPS URL")
+    return text
 
 
 def _number(value: Any, name: str) -> float:
@@ -194,6 +177,12 @@ def _positive_number(value: Any, name: str) -> float:
     if number <= 0:
         raise ConfigError(f"{name} must be greater than zero")
     return number
+
+
+def _positive_integer(value: Any, name: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise ConfigError(f"{name} must be a positive integer")
+    return value
 
 
 def _absolute_path(value: Any, name: str) -> Path:

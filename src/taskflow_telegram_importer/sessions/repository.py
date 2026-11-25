@@ -11,7 +11,7 @@ from taskflow_telegram_importer.errors import ImporterError
 from .models import EditorialHint, FileState, ImportFile, ImportSession, SessionState
 
 
-_SCHEMA_VERSION = 1
+_SCHEMA_VERSION = 2
 _SESSION_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")
 
 
@@ -133,13 +133,14 @@ def _encode_session(session: ImportSession) -> dict[str, Any]:
         "files": [
             {
                 "message_id": item.message_id,
-                "file_id": item.file_id,
-                "file_unique_id": item.file_unique_id,
                 "filename": item.filename,
                 "expected_size": item.expected_size,
                 "state": item.state.value,
                 "staging_path": str(item.staging_path) if item.staging_path else None,
                 "error": item.error,
+                "downloaded_bytes": item.downloaded_bytes,
+                "download_speed_bps": item.download_speed_bps,
+                "download_eta_seconds": item.download_eta_seconds,
             }
             for item in session.files
         ],
@@ -170,8 +171,6 @@ def _decode_session(raw: dict[str, Any]) -> ImportSession:
         files=tuple(
             ImportFile(
                 message_id=int(item["message_id"]),
-                file_id=str(item["file_id"]),
-                file_unique_id=str(item["file_unique_id"]),
                 filename=str(item["filename"]),
                 expected_size=int(item["expected_size"]),
                 state=FileState(item["state"]),
@@ -179,6 +178,13 @@ def _decode_session(raw: dict[str, Any]) -> ImportSession:
                     Path(item["staging_path"]) if item["staging_path"] else None
                 ),
                 error=item["error"],
+                downloaded_bytes=int(item["downloaded_bytes"]),
+                download_speed_bps=float(item["download_speed_bps"]),
+                download_eta_seconds=(
+                    int(item["download_eta_seconds"])
+                    if item["download_eta_seconds"] is not None
+                    else None
+                ),
             )
             for item in raw["files"]
         ),

@@ -31,13 +31,14 @@ class EditorialHint:
 @dataclass(frozen=True, slots=True)
 class ImportFile:
     message_id: int
-    file_id: str
-    file_unique_id: str
     filename: str
     expected_size: int
     state: FileState
     staging_path: Path | None = None
     error: str | None = None
+    downloaded_bytes: int = 0
+    download_speed_bps: float = 0.0
+    download_eta_seconds: int | None = None
 
 
 @dataclass(frozen=True, slots=True)

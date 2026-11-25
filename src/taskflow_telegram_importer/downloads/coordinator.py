@@ -3,8 +3,9 @@ from __future__ import annotations
 import asyncio
 import inspect
 import logging
+import time
 from dataclasses import replace
-from typing import Awaitable, Callable
+from typing import Callable
 
 from taskflow_telegram_importer.errors import ImporterError
 from taskflow_telegram_importer.publisher import FilesystemPublisher
@@ -17,6 +18,7 @@ from taskflow_telegram_importer.sessions import (
 )
 
 from .source import TelegramFileSource
+from .progress import ProgressMeter
 
 _LOGGER = logging.getLogger("taskflow_telegram_importer.downloads")
 
@@ -27,15 +29,19 @@ class DownloadCoordinator:
         repository: SessionRepository,
         publisher: FilesystemPublisher,
         source: TelegramFileSource,
-        blocking_runner: Callable[..., Awaitable] = asyncio.to_thread,
+        max_concurrent_downloads: int,
+        progress_refresh_seconds: float,
+        clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self._repository = repository
         self._publisher = publisher
         self._source = source
-        self._blocking_runner = blocking_runner
+        self._download_slots = asyncio.Semaphore(max_concurrent_downloads)
+        self._progress_refresh_seconds = progress_refresh_seconds
+        self._clock = clock
         self._tasks: dict[tuple[str, int], asyncio.Task[None]] = {}
         self._locks: dict[str, asyncio.Lock] = {}
-        self._terminal_callback = None
+        self._change_callback = None
 
     @property
     def active_keys(self) -> frozenset[tuple[str, int]]:
@@ -53,15 +59,23 @@ class DownloadCoordinator:
         self._tasks[key] = task
         task.add_done_callback(lambda completed, key=key: self._discard(key, completed))
 
-    def set_terminal_callback(self, callback) -> None:
-        self._terminal_callback = callback
+    def set_change_callback(self, callback) -> None:
+        self._change_callback = callback
 
     def retry(self, session_id: str, message_id: int) -> None:
         session = self._repository.load(session_id)
         file = _find_file(session, message_id)
         if file.state is not FileState.FAILED:
             raise ImporterError("only failed files can be retried")
-        reset = replace(file, state=FileState.RECEIVED, error=None, staging_path=None)
+        reset = replace(
+            file,
+            state=FileState.RECEIVED,
+            error=None,
+            staging_path=None,
+            downloaded_bytes=0,
+            download_speed_bps=0.0,
+            download_eta_seconds=None,
+        )
         self._repository.save(_replace_file(session, reset))
         _LOGGER.info("retry requested session=%s message=%d", session_id, message_id)
         self.start(session_id, reset)
@@ -111,6 +125,9 @@ class DownloadCoordinator:
                 continue
             for file in session.files:
                 if file.state in {FileState.RECEIVED, FileState.DOWNLOADING}:
+                    self._publisher.discard_incomplete_download(
+                        session.session_id, file.filename
+                    )
                     self.start(session.session_id, file)
                     recovered += 1
         if recovered:
@@ -138,38 +155,61 @@ class DownloadCoordinator:
             await asyncio.gather(*tasks, return_exceptions=True)
 
     async def _download(self, session_id: str, message_id: int) -> None:
-        blocking_task = None
+        target = None
         staged_path = None
         try:
-            file = await self._transition(session_id, message_id, FileState.DOWNLOADING)
-            source_path = await self._source.get_local_file(file.file_id)
-            blocking_task = asyncio.create_task(
-                self._blocking_runner(
-                    self._publisher.prepare_file,
-                    session_id,
-                    file.filename,
-                    source_path,
-                    file.expected_size,
+            async with self._download_slots:
+                file = await self._transition(
+                    session_id, message_id, FileState.DOWNLOADING
                 )
-            )
-            staged_path = await asyncio.shield(blocking_task)
-            await self._transition(
-                session_id,
-                message_id,
-                FileState.COMPLETE,
-                staging_path=staged_path,
-                error=None,
-            )
-            await self._notify_terminal(session_id)
-            _LOGGER.info("download complete session=%s message=%d", session_id, message_id)
+                await self._notify_change(session_id)
+                session = self._repository.load(session_id)
+                target = self._publisher.prepare_download(
+                    session_id, file.filename, file.expected_size
+                )
+                started_at = self._clock()
+                meter = ProgressMeter(started_at=started_at)
+                last_reported_at = started_at - self._progress_refresh_seconds
+
+                async def report_progress(current: int, total: int) -> None:
+                    nonlocal last_reported_at
+                    now = self._clock()
+                    if (
+                        current < total
+                        and now - last_reported_at < self._progress_refresh_seconds
+                    ):
+                        return
+                    last_reported_at = now
+                    snapshot = meter.snapshot(current=current, total=total, now=now)
+                    await self._progress(session_id, message_id, snapshot)
+                    await self._notify_change(session_id)
+
+                await self._source.download(
+                    session.chat_id,
+                    message_id,
+                    target.temporary,
+                    report_progress,
+                )
+                staged_path = self._publisher.finalize_download(
+                    target, file.expected_size
+                )
+                await self._transition(
+                    session_id,
+                    message_id,
+                    FileState.COMPLETE,
+                    staging_path=staged_path,
+                    error=None,
+                    downloaded_bytes=file.expected_size,
+                    download_eta_seconds=0,
+                )
+                await self._notify_change(session_id)
+                _LOGGER.info(
+                    "download complete session=%s message=%d", session_id, message_id
+                )
         except asyncio.CancelledError:
-            if blocking_task is not None:
-                try:
-                    staged_path = await blocking_task
-                except Exception:
-                    staged_path = None
-            if staged_path is not None:
-                self._publisher.discard_staged(session_id, staged_path)
+            if target is not None:
+                self._publisher.discard_staged(session_id, target.temporary)
+                self._publisher.discard_staged(session_id, target.final)
             try:
                 await self._transition(
                     session_id,
@@ -177,11 +217,17 @@ class DownloadCoordinator:
                     FileState.RECEIVED,
                     staging_path=None,
                     error=None,
+                    downloaded_bytes=0,
+                    download_speed_bps=0.0,
+                    download_eta_seconds=None,
                 )
             except ImporterError:
                 pass
             raise
         except Exception as exc:
+            if target is not None:
+                self._publisher.discard_staged(session_id, target.temporary)
+                self._publisher.discard_staged(session_id, target.final)
             _LOGGER.error(
                 "download failed session=%s message=%d component=%s",
                 session_id,
@@ -194,8 +240,10 @@ class DownloadCoordinator:
                 FileState.FAILED,
                 staging_path=None,
                 error=f"{type(exc).__name__}: {exc}",
+                download_speed_bps=0.0,
+                download_eta_seconds=None,
             )
-            await self._notify_terminal(session_id)
+            await self._notify_change(session_id)
 
     async def _transition(
         self,
@@ -205,24 +253,43 @@ class DownloadCoordinator:
         *,
         staging_path=None,
         error: str | None = None,
+        downloaded_bytes: int | None = None,
+        download_speed_bps: float | None = None,
+        download_eta_seconds: int | None = None,
     ) -> ImportFile:
         async with self._lock(session_id):
             session = self._repository.load(session_id)
             current = _find_file(session, message_id)
-            updated = replace(
-                current, state=state, staging_path=staging_path, error=error
-            )
+            changes = {"state": state, "staging_path": staging_path, "error": error}
+            if downloaded_bytes is not None:
+                changes["downloaded_bytes"] = downloaded_bytes
+            if download_speed_bps is not None:
+                changes["download_speed_bps"] = download_speed_bps
+            changes["download_eta_seconds"] = download_eta_seconds
+            updated = replace(current, **changes)
             self._repository.save(_replace_file(session, updated))
             return updated
+
+    async def _progress(self, session_id, message_id, snapshot) -> None:
+        async with self._lock(session_id):
+            session = self._repository.load(session_id)
+            current = _find_file(session, message_id)
+            updated = replace(
+                current,
+                downloaded_bytes=snapshot.downloaded_bytes,
+                download_speed_bps=snapshot.bytes_per_second,
+                download_eta_seconds=snapshot.eta_seconds,
+            )
+            self._repository.save(_replace_file(session, updated))
 
     def _lock(self, session_id: str) -> asyncio.Lock:
         return self._locks.setdefault(session_id, asyncio.Lock())
 
-    async def _notify_terminal(self, session_id: str) -> None:
-        if self._terminal_callback is None:
+    async def _notify_change(self, session_id: str) -> None:
+        if self._change_callback is None:
             return
         try:
-            result = self._terminal_callback(session_id)
+            result = self._change_callback(session_id)
             if inspect.isawaitable(result):
                 await result
         except Exception as exc:

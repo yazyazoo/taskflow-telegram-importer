@@ -5,6 +5,7 @@ import re
 import shutil
 import stat
 import logging
+from dataclasses import dataclass
 from pathlib import Path
 
 from taskflow_telegram_importer.errors import ImporterError
@@ -16,6 +17,12 @@ from .names import normalize_session_directory
 _SESSION_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")
 _GIB = 1024**3
 _LOGGER = logging.getLogger("taskflow_telegram_importer.publisher")
+
+
+@dataclass(frozen=True, slots=True)
+class DownloadTarget:
+    temporary: Path
+    final: Path
 
 
 class FilesystemPublisher:
@@ -34,25 +41,17 @@ class FilesystemPublisher:
         if _device_id(self.staging) != _device_id(self.gate):
             raise ImporterError("staging and gate must use the same filesystem")
 
-    def prepare_file(
+    def prepare_download(
         self,
         session_id: str,
         filename: str,
-        source: Path,
         expected_size: int,
-    ) -> Path:
+    ) -> DownloadTarget:
         self.preflight()
         _validate_session_id(session_id)
         _validate_filename(filename)
-        source = Path(source)
-        try:
-            source_stat = source.lstat()
-        except OSError as exc:
-            raise ImporterError("Telegram source is not readable") from exc
-        if not stat.S_ISREG(source_stat.st_mode) or source.is_symlink():
-            raise ImporterError("Telegram source must be a regular file")
-        if expected_size < 0 or source_stat.st_size != expected_size:
-            raise ImporterError("Telegram source size does not match expected size")
+        if expected_size < 0:
+            raise ImporterError("Telegram file size is invalid")
         if _free_bytes(self.staging) - expected_size < self.minimum_free_bytes:
             raise ImporterError("insufficient free space in staging")
 
@@ -62,46 +61,41 @@ class FilesystemPublisher:
             raise ImporterError("session staging directory is a symlink")
         session_directory.mkdir(mode=0o700, parents=False, exist_ok=True)
         _ensure_directory_path_safe(session_directory)
-        target = session_directory / filename
+        final = session_directory / filename
         temporary = session_directory / f".{filename}.part"
-        _require_contained(target, self.staging)
-        if target.exists() or target.is_symlink() or temporary.exists() or temporary.is_symlink():
+        _require_contained(final, self.staging)
+        if final.exists() or final.is_symlink() or temporary.exists() or temporary.is_symlink():
             raise ImporterError("staging target already exists")
+        return DownloadTarget(temporary=temporary, final=final)
 
-        source_flags = os.O_RDONLY
-        target_flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
-        if hasattr(os, "O_NOFOLLOW"):
-            source_flags |= os.O_NOFOLLOW
-            target_flags |= os.O_NOFOLLOW
-        directory_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
-        if hasattr(os, "O_NOFOLLOW"):
-            directory_flags |= os.O_NOFOLLOW
-        directory_fd = os.open(session_directory, directory_flags)
+    def finalize_download(self, target: DownloadTarget, expected_size: int) -> Path:
+        session_directory = target.final.parent
+        _require_contained(target.temporary, self.staging)
+        _require_contained(target.final, self.staging)
+        _ensure_directory_path_safe(session_directory)
         try:
-            source_fd = os.open(source, source_flags)
-            target_fd = os.open(temporary.name, target_flags, 0o600, dir_fd=directory_fd)
-            with os.fdopen(source_fd, "rb") as source_handle, os.fdopen(
-                target_fd, "wb"
-            ) as target_handle:
-                shutil.copyfileobj(source_handle, target_handle, length=1024 * 1024)
-                target_handle.flush()
-                os.fsync(target_handle.fileno())
-            if os.stat(temporary.name, dir_fd=directory_fd, follow_symlinks=False).st_size != expected_size:
+            metadata = target.temporary.lstat()
+            if target.temporary.is_symlink() or not stat.S_ISREG(metadata.st_mode):
+                raise ImporterError("downloaded staging object is not a regular file")
+            if metadata.st_size != expected_size:
                 raise ImporterError("staged file size does not match expected size")
-            os.rename(
-                temporary.name,
-                target.name,
-                src_dir_fd=directory_fd,
-                dst_dir_fd=directory_fd,
-            )
+            descriptor = os.open(target.temporary, os.O_RDONLY)
+            try:
+                os.fsync(descriptor)
+            finally:
+                os.close(descriptor)
+            os.replace(target.temporary, target.final)
             _fsync_directory(session_directory)
-            _LOGGER.info("staged file session=%s file=%s bytes=%d", session_id, filename, expected_size)
-            return target
+            _LOGGER.info(
+                "staged file session=%s file=%s bytes=%d",
+                session_directory.name,
+                target.final.name,
+                expected_size,
+            )
+            return target.final
         except Exception:
-            temporary.unlink(missing_ok=True)
+            target.temporary.unlink(missing_ok=True)
             raise
-        finally:
-            os.close(directory_fd)
 
     def plan_publication(self, session: ImportSession) -> tuple[Path, ...]:
         files = tuple(item for item in session.files if item.state is not FileState.EXCLUDED)
@@ -184,6 +178,13 @@ class FilesystemPublisher:
             expected_parent.rmdir()
         except OSError:
             pass
+
+    def discard_incomplete_download(self, session_id: str, filename: str) -> None:
+        _validate_session_id(session_id)
+        _validate_filename(filename)
+        session_directory = self.staging / session_id
+        self.discard_staged(session_id, session_directory / f".{filename}.part")
+        self.discard_staged(session_id, session_directory / filename)
 
     def delete_owned_paths(self, session: ImportSession) -> None:
         candidates = [

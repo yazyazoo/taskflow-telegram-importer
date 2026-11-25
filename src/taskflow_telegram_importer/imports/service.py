@@ -64,8 +64,6 @@ class ImportService:
         chat_id: int,
         user_id: int,
         message_id: int,
-        file_id: str,
-        file_unique_id: str,
         filename: str,
         expected_size: int,
         caption: str | None = None,
@@ -78,8 +76,6 @@ class ImportService:
             return session
         file = ImportFile(
             message_id=message_id,
-            file_id=file_id,
-            file_unique_id=file_unique_id,
             filename=filename,
             expected_size=expected_size,
             state=FileState.RECEIVED,
@@ -191,7 +187,7 @@ class ImportService:
     def add_listener(self, listener) -> None:
         self._listeners.append(listener)
 
-    async def file_terminal(self, session_id: str) -> ImportSession:
+    async def file_changed(self, session_id: str) -> ImportSession:
         session = self.reconcile(session_id)
         for listener in tuple(self._listeners):
             result = listener(session)

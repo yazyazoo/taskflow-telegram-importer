@@ -5,21 +5,24 @@ keys are rejected at startup.
 
 ## Telegram
 
-`telegram.api_base_url` is the local Bot API base URL ending in `/bot`.
-`local_mode` must remain enabled so `getFile` returns a local absolute path.
-`long_poll_request_timeout_seconds` controls the open long-poll request; new
-updates still return immediately. `allowed_user_ids` contains the numeric IDs
-of authorized operators. Only their private chats are accepted.
+`api_id`, `api_hash`, and `bot_token` authenticate the Telethon bot session.
+`session_path` is the persistent MTProto session file; its parent must be
+writable and survive restarts. Keep real credentials only in untracked
+`config.yml`.
 
-The BotFather token is resolved by executing, without a shell:
+`progress_refresh_seconds` controls persisted progress and Telegram panel
+updates; it does not delay downloads. `max_concurrent_downloads` bounds active
+MTProto transfers globally; additional files remain queued.
+`allowed_user_ids` contains the numeric IDs of authorized operators. Only their
+private chats are accepted.
 
-```text
-<token_command.executable> <token_command.alias> <token_command.field>
-```
+The repository example uses two active transfers and a 30-second refresh.
 
-Store the token in Vaultwarden and expose only the allowlisted alias through
-`rp-secret`. Command output, stderr, and token values are never included in
-configuration errors.
+## TaskFlow WebUI
+
+`taskflow.webui_url` is the HTTPS address opened by the Telegram `/taskflow`
+command. Authentication remains inside the normal TaskFlow WebUI login; the
+importer never appends the access token to the URL.
 
 ## Paths and files
 
@@ -29,7 +32,7 @@ internal importer log.
 
 `files.allowed_extensions` defines phase-one video types. Matching is case
 insensitive. `minimum_free_gib` is the free-space reserve left after staging a
-file. There is intentionally no 7z setting in phase one.
+file. There is intentionally no 7z setting yet.
 
 All operational paths, extensions, timeouts, user IDs, reserves, URLs, and log
 levels belong in `config.yml`; source code contains no deployment values.

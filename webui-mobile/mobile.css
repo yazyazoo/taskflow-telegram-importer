@@ -1,0 +1,138 @@
+:root {
+  color-scheme: dark;
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  background: #091728;
+  color: #f4f7fb;
+}
+
+html, body { margin: 0; min-width: 0; min-height: 100%; overflow-x: hidden; }
+[hidden] { display: none !important; }
+
+.mobile-login {
+  min-height: 100vh;
+  min-height: 100dvh;
+  display: grid;
+  place-items: center;
+  padding: max(1rem, env(safe-area-inset-top)) 1rem max(1rem, env(safe-area-inset-bottom));
+  box-sizing: border-box;
+}
+
+.login-card {
+  width: min(100%, 28rem);
+  display: grid;
+  gap: .8rem;
+  padding: 1.25rem;
+  box-sizing: border-box;
+  border: 1px solid #28415e;
+  border-radius: 14px;
+  background: #12243a;
+}
+
+.login-card h1, .login-card p { margin: 0; }
+.login-card p { color: #a9bdd3; }
+.login-card input, .login-card button {
+  width: 100%;
+  box-sizing: border-box;
+  border-radius: 9px;
+  padding: .8rem;
+  font: inherit;
+}
+.login-card input { border: 1px solid #36516f; background: #091728; color: #fff; }
+.login-card button { border: 0; background: #7ce2c5; color: #091728; font-weight: 800; }
+.brand-mark { display: grid; place-items: center; width: 36px; height: 36px; border-radius: 10px;
+  background: #7ce2c5; color: #091728; font-weight: 900; }
+
+.logout {
+  position: fixed;
+  right: max(.6rem, env(safe-area-inset-right));
+  bottom: max(.6rem, env(safe-area-inset-bottom));
+  z-index: 1000;
+  border: 1px solid #36516f;
+  border-radius: 999px;
+  padding: .45rem .7rem;
+  background: #12243a;
+  color: #dbe7f4;
+  font: 12px/1.2 inherit;
+}
+
+taskflow-ui { display: block; width: 100%; min-width: 0; }
+
+/* The rules below are also loaded inside the TaskFlow open Shadow DOM. */
+@media (max-width: 640px) {
+  :host { width: 100%; min-width: 0; max-width: 100%; overflow-x: hidden; }
+  .app-shell, .layout, main, main > *, section, fieldset, .panel, .metric,
+  .form-panel, .run-list, .run-heading, .task-progress { min-width: 0; max-width: 100%; }
+
+  .topbar {
+    min-height: 52px;
+    height: auto;
+    padding: .3rem .6rem;
+    gap: .4rem;
+  }
+  .brand { gap: .45rem; }
+  .brand-mark { width: 30px; height: 30px; border-radius: 8px; }
+  .brand small { display: none; }
+  .topbar-controls { min-width: 0; gap: .35rem; }
+  .theme-selector { min-width: 0; }
+  .theme-selector select { min-width: 0; width: 7rem; max-width: 32vw; padding: .35rem; }
+  .connection { width: 9px; overflow: hidden; font-size: 0; }
+  .connection-dot { margin: 0; }
+
+  .sidebar {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    padding: .35rem;
+    gap: .2rem;
+  }
+  .sidebar button { min-width: 0; padding: .42rem .3rem; text-align: center;
+    overflow-wrap: anywhere; font-size: .82rem; }
+  .sidebar .option-row { grid-column: 1 / -1; }
+
+  main { width: 100%; padding: .75rem .6rem 3.5rem; overflow-x: hidden; }
+  h2 { font-size: 1.45rem; }
+  .section-heading, .package-group-heading, .run-heading, .plain-list li {
+    align-items: flex-start;
+    flex-wrap: wrap;
+    gap: .35rem .6rem;
+  }
+  .section-heading { margin-bottom: .8rem; }
+  .metric, .panel, .auth-panel { padding: .8rem; }
+  .metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .55rem; }
+  .metric strong { margin-top: .15rem; font-size: 1.55rem; }
+  .panel-grid, .task-fields { grid-template-columns: minmax(0, 1fr); gap: .65rem; }
+  .panel-grid, .form-panel { margin-top: .8rem; }
+  .plain-list li, .option-row, .task-order li { padding-top: .35rem; padding-bottom: .35rem; }
+  .run-list { gap: .65rem; }
+  .task-progress-note--compact { white-space: normal; }
+  .source-path, .notification, pre, textarea, input, select { max-width: 100%; overflow-wrap: anywhere; }
+  .inline-actions { display: flex; flex-wrap: wrap; margin: .45rem 0 0; }
+  .action-row { flex-wrap: wrap; }
+
+  .table-wrap { overflow: visible; border: 0; border-radius: 0; }
+  table, thead, tbody, tr, th, td { display: block; width: 100%; min-width: 0; }
+  thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+  tbody { display: grid; gap: .5rem; }
+  tr {
+    padding: .2rem .65rem;
+    border: 1px solid var(--tf-border);
+    border-radius: var(--tf-card-radius);
+    background: var(--tf-surface);
+  }
+  td {
+    display: grid;
+    grid-template-columns: minmax(5.2rem, 34%) minmax(0, 1fr);
+    gap: .55rem;
+    padding: .4rem 0;
+    border-bottom: 1px solid var(--tf-border);
+    overflow-wrap: anywhere;
+  }
+  td::before {
+    content: attr(data-mobile-label);
+    color: var(--tf-muted);
+    font-size: .72rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: .04em;
+  }
+  td:last-child { border-bottom: 0; }
+}

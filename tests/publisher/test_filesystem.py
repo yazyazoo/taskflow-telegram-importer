@@ -27,11 +27,20 @@ def _source(tmp_path: Path, name: str = "episode.mkv", content: bytes = b"video"
     return path
 
 
+def _stage(
+    publisher: FilesystemPublisher,
+    session_id: str,
+    filename: str,
+    content: bytes,
+) -> Path:
+    target = publisher.prepare_download(session_id, filename, len(content))
+    target.temporary.write_bytes(content)
+    return publisher.finalize_download(target, len(content))
+
+
 def _file(message_id: int, filename: str, staging_path: Path) -> ImportFile:
     return ImportFile(
         message_id=message_id,
-        file_id=f"file-{message_id}",
-        file_unique_id=f"unique-{message_id}",
         filename=filename,
         expected_size=staging_path.stat().st_size,
         state=FileState.COMPLETE,
@@ -53,20 +62,19 @@ def _session(files: tuple[ImportFile, ...]) -> ImportSession:
 @pytest.mark.parametrize("filename", ["../escape.mkv", "/tmp/escape.mkv", "a/b.mkv", "bad\x00.mkv"])
 def test_prepare_rejects_unsafe_filenames(tmp_path: Path, filename: str) -> None:
     publisher = _publisher(tmp_path)
-    source = _source(tmp_path)
 
     with pytest.raises(ImporterError, match="filename"):
-        publisher.prepare_file("session-one", filename, source, source.stat().st_size)
+        publisher.prepare_download("session-one", filename, 5)
 
 
-def test_prepare_rejects_symlink_source(tmp_path: Path) -> None:
+def test_finalize_rejects_symlink_partial_file(tmp_path: Path) -> None:
     publisher = _publisher(tmp_path)
     source = _source(tmp_path)
-    link = tmp_path / "link.mkv"
-    link.symlink_to(source)
+    target = publisher.prepare_download("session-one", "episode.mkv", 5)
+    target.temporary.symlink_to(source)
 
     with pytest.raises(ImporterError, match="regular"):
-        publisher.prepare_file("session-one", "episode.mkv", link, source.stat().st_size)
+        publisher.finalize_download(target, 5)
 
 
 def test_prepare_rejects_symlink_session_directory(tmp_path: Path) -> None:
@@ -75,10 +83,8 @@ def test_prepare_rejects_symlink_session_directory(tmp_path: Path) -> None:
     outside = tmp_path / "outside"
     outside.mkdir()
     (publisher.staging / "session-one").symlink_to(outside, target_is_directory=True)
-    source = _source(tmp_path)
-
     with pytest.raises(ImporterError, match="symlink"):
-        publisher.prepare_file("session-one", "episode.mkv", source, 5)
+        publisher.prepare_download("session-one", "episode.mkv", 5)
 
     assert not (outside / "episode.mkv").exists()
 
@@ -94,13 +100,14 @@ def test_preflight_rejects_different_filesystems(tmp_path: Path, monkeypatch) ->
         publisher.preflight()
 
 
-def test_prepare_copies_complete_file_with_unchanged_basename(tmp_path: Path) -> None:
+def test_finalize_download_atomically_promotes_part_file(tmp_path: Path) -> None:
     publisher = _publisher(tmp_path)
-    source = _source(tmp_path, "Original Name.mkv", b"complete-video")
-
-    staged = publisher.prepare_file(
-        "session-one", "Original Name.mkv", source, len(b"complete-video")
+    target = publisher.prepare_download(
+        "session-one", "Original Name.mkv", len(b"complete-video")
     )
+    target.temporary.write_bytes(b"complete-video")
+
+    staged = publisher.finalize_download(target, len(b"complete-video"))
 
     assert staged == publisher.staging / "session-one" / "Original Name.mkv"
     assert staged.read_bytes() == b"complete-video"
@@ -109,29 +116,28 @@ def test_prepare_copies_complete_file_with_unchanged_basename(tmp_path: Path) ->
 
 def test_prepare_rejects_size_mismatch_without_complete_file(tmp_path: Path) -> None:
     publisher = _publisher(tmp_path)
-    source = _source(tmp_path, content=b"short")
+    target = publisher.prepare_download("session-one", "episode.mkv", 100)
+    target.temporary.write_bytes(b"short")
 
     with pytest.raises(ImporterError, match="size"):
-        publisher.prepare_file("session-one", "episode.mkv", source, 100)
+        publisher.finalize_download(target, 100)
 
     assert not (publisher.staging / "session-one" / "episode.mkv").exists()
 
 
 def test_prepare_rejects_insufficient_free_space(tmp_path: Path, monkeypatch) -> None:
     publisher = _publisher(tmp_path, reserve=1)
-    source = _source(tmp_path, content=b"video")
     monkeypatch.setattr(
         "taskflow_telegram_importer.publisher.filesystem._free_bytes", lambda path: 10
     )
 
     with pytest.raises(ImporterError, match="free space"):
-        publisher.prepare_file("session-one", "episode.mkv", source, 5)
+        publisher.prepare_download("session-one", "episode.mkv", 5)
 
 
 def test_publishes_one_file_at_gate_root(tmp_path: Path) -> None:
     publisher = _publisher(tmp_path)
-    source = _source(tmp_path)
-    staged = publisher.prepare_file("session-one", "episode.mkv", source, 5)
+    staged = _stage(publisher, "session-one", "episode.mkv", b"video")
 
     published = publisher.publish(_session((_file(1, "episode.mkv", staged),)))
 
@@ -143,8 +149,7 @@ def test_single_file_recovery_accepts_completed_target_and_empty_session_dir(
     tmp_path: Path,
 ) -> None:
     publisher = _publisher(tmp_path)
-    source = _source(tmp_path)
-    staged = publisher.prepare_file("session-one", "episode.mkv", source, 5)
+    staged = _stage(publisher, "session-one", "episode.mkv", b"video")
     base = _session((_file(1, "episode.mkv", staged),))
     planned = publisher.plan_publication(base)
     publishing = replace(
@@ -159,10 +164,8 @@ def test_single_file_recovery_accepts_completed_target_and_empty_session_dir(
 
 def test_publishes_multiple_files_by_one_directory_rename(tmp_path: Path) -> None:
     publisher = _publisher(tmp_path)
-    first_source = _source(tmp_path, "one.mkv", b"one")
-    second_source = _source(tmp_path, "two.mkv", b"two")
-    first = publisher.prepare_file("session-one", "one.mkv", first_source, 3)
-    second = publisher.prepare_file("session-one", "two.mkv", second_source, 3)
+    first = _stage(publisher, "session-one", "one.mkv", b"one")
+    second = _stage(publisher, "session-one", "two.mkv", b"two")
 
     published = publisher.publish(
         _session((_file(1, "one.mkv", first), _file(2, "two.mkv", second)))
@@ -176,8 +179,8 @@ def test_publishes_multiple_files_by_one_directory_rename(tmp_path: Path) -> Non
 
 def test_publish_refuses_existing_target_before_moving_any_file(tmp_path: Path) -> None:
     publisher = _publisher(tmp_path)
-    first = publisher.prepare_file("session-one", "one.mkv", _source(tmp_path, "one.mkv"), 5)
-    second = publisher.prepare_file("session-one", "two.mkv", _source(tmp_path, "two.mkv"), 5)
+    first = _stage(publisher, "session-one", "one.mkv", b"video")
+    second = _stage(publisher, "session-one", "two.mkv", b"video")
     target = publisher.gate / "Cape_Fear_2025"
     target.mkdir(parents=True)
 
@@ -189,7 +192,7 @@ def test_publish_refuses_existing_target_before_moving_any_file(tmp_path: Path) 
 
 def test_delete_removes_only_manifest_owned_paths(tmp_path: Path) -> None:
     publisher = _publisher(tmp_path)
-    staged = publisher.prepare_file("session-one", "episode.mkv", _source(tmp_path), 5)
+    staged = _stage(publisher, "session-one", "episode.mkv", b"video")
     unrelated = publisher.gate / "keep.mkv"
     unrelated.parent.mkdir(parents=True, exist_ok=True)
     unrelated.write_bytes(b"keep")

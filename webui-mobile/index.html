@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="it">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <meta name="theme-color" content="#091728">
+    <title>TaskFlow Mobile</title>
+    <link rel="stylesheet" href="./mobile.css">
+    <script defer src="../taskflow-ui.js"></script>
+    <script defer src="./mobile.js"></script>
+  </head>
+  <body>
+    <main id="mobile-login" class="mobile-login" hidden>
+      <form id="token-form" class="login-card">
+        <div class="brand-mark" aria-hidden="true">T</div>
+        <h1>TaskFlow Mobile</h1>
+        <p>Inserisci il token una sola volta. Rimarrà memorizzato nel browser Telegram.</p>
+        <label for="access-token">Access token</label>
+        <input id="access-token" name="access-token" type="password" required autocomplete="off">
+        <button type="submit">Apri TaskFlow</button>
+      </form>
+    </main>
+
+    <button id="logout" class="logout" type="button" hidden>Disconnetti</button>
+    <taskflow-ui id="taskflow-mobile" hidden></taskflow-ui>
+  </body>
+</html>
