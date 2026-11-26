@@ -16,6 +16,7 @@ from taskflow_telegram_importer.sessions import (
     QuickWorkflowDraft,
     SessionRepository,
     SessionState,
+    VideoMetadata,
 )
 
 
@@ -57,6 +58,39 @@ def test_manifest_round_trip_preserves_large_ids_paths_and_states(tmp_path: Path
     )
 
     repository.create(session)
+
+    assert repository.load(session.session_id) == session
+
+
+def test_manifest_round_trip_preserves_predownload_video_metadata(tmp_path: Path) -> None:
+    repository = SessionRepository(tmp_path)
+    session = replace(
+        _session(),
+        files=(
+            replace(
+                _file(),
+                metadata=VideoMetadata(
+                    width=1920,
+                    height=816,
+                    duration_seconds=3319.92,
+                ),
+            ),
+        ),
+    )
+
+    repository.create(session)
+
+    assert repository.load(session.session_id) == session
+
+
+def test_manifest_without_predownload_metadata_remains_readable(tmp_path: Path) -> None:
+    repository = SessionRepository(tmp_path)
+    session = _session()
+    repository.create(session)
+    manifest = repository.directory / "session-one.json"
+    raw = json.loads(manifest.read_text(encoding="utf-8"))
+    raw["files"][0].pop("metadata", None)
+    manifest.write_text(json.dumps(raw), encoding="utf-8")
 
     assert repository.load(session.session_id) == session
 

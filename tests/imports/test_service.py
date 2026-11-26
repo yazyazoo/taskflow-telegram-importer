@@ -13,6 +13,7 @@ from taskflow_telegram_importer.sessions import (
     ImportSession,
     SessionRepository,
     SessionState,
+    VideoMetadata,
 )
 
 
@@ -98,6 +99,22 @@ def test_received_files_share_one_collecting_session_without_starting_downloads(
     assert first.session_id == second.session_id == duplicate.session_id
     assert len(repository.load(first.session_id).files) == 2
     assert coordinator.started == []
+
+
+def test_receive_video_persists_predownload_metadata(tmp_path: Path) -> None:
+    service, repository, _, _ = _service(tmp_path)
+    metadata = VideoMetadata(width=1920, height=816, duration_seconds=3319.92)
+
+    snapshot = service.receive_video(
+        chat_id=20,
+        user_id=10,
+        message_id=1,
+        filename="episode.mkv",
+        expected_size=2_311_467_422,
+        metadata=metadata,
+    )
+
+    assert repository.load(snapshot.session_id).files[0].metadata == metadata
 
 
 def test_session_milestones_are_logged(tmp_path: Path, caplog) -> None:

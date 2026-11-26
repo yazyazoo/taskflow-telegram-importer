@@ -10,7 +10,8 @@ from taskflow_telegram_importer.errors import ImporterError
 
 from .models import (
     EditorialHint, FileState, ImportFile, ImportMode, ImportSession, QuickStage,
-    QuickWorkflowDraft, SessionState, TmdbCandidate, WorkflowPreset,
+    QuickWorkflowDraft, SessionState, TmdbCandidate, VideoMetadata,
+    WorkflowPreset,
 )
 
 
@@ -144,6 +145,15 @@ def _encode_session(session: ImportSession) -> dict[str, Any]:
                 "downloaded_bytes": item.downloaded_bytes,
                 "download_speed_bps": item.download_speed_bps,
                 "download_eta_seconds": item.download_eta_seconds,
+                "metadata": (
+                    {
+                        "width": item.metadata.width,
+                        "height": item.metadata.height,
+                        "duration_seconds": item.metadata.duration_seconds,
+                    }
+                    if item.metadata is not None
+                    else None
+                ),
             }
             for item in session.files
         ],
@@ -248,6 +258,7 @@ def _decode_session(raw: dict[str, Any]) -> ImportSession:
                     if item["download_eta_seconds"] is not None
                     else None
                 ),
+                metadata=_decode_video_metadata(item.get("metadata")),
             )
             for item in raw["files"]
         ),
@@ -258,4 +269,18 @@ def _decode_session(raw: dict[str, Any]) -> ImportSession:
         published_paths=tuple(Path(value) for value in raw["published_paths"]),
         mode=ImportMode(raw["mode"]) if raw.get("mode") is not None else None,
         quick=quick,
+    )
+
+
+def _decode_video_metadata(raw: dict[str, Any] | None) -> VideoMetadata | None:
+    if raw is None:
+        return None
+    return VideoMetadata(
+        width=int(raw["width"]) if raw.get("width") is not None else None,
+        height=int(raw["height"]) if raw.get("height") is not None else None,
+        duration_seconds=(
+            float(raw["duration_seconds"])
+            if raw.get("duration_seconds") is not None
+            else None
+        ),
     )

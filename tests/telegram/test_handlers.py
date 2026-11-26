@@ -15,6 +15,7 @@ from taskflow_telegram_importer.sessions import (
     QuickStage,
     QuickWorkflowDraft,
     SessionState,
+    VideoMetadata,
 )
 from taskflow_telegram_importer.telegram.handlers import TelegramHandlers
 
@@ -133,6 +134,9 @@ class FakeEvent:
         message_id=1,
         filename=None,
         size=0,
+        width=None,
+        height=None,
+        duration=None,
         text=None,
         caption=None,
         photo=False,
@@ -142,7 +146,17 @@ class FakeEvent:
         self.chat_id = chat_id
         self.is_private = is_private
         self.data = data.encode() if isinstance(data, str) else data
-        file = SimpleNamespace(name=filename, size=size) if filename else None
+        file = (
+            SimpleNamespace(
+                name=filename,
+                size=size,
+                width=width,
+                height=height,
+                duration=duration,
+            )
+            if filename
+            else None
+        )
         self.message = SimpleNamespace(
             id=message_id,
             file=file,
@@ -185,7 +199,13 @@ def _handlers(service=None):
 @pytest.mark.asyncio
 async def test_receives_large_video_without_bot_api_file_identifiers() -> None:
     handlers, service, _ = _handlers()
-    event = FakeEvent(filename="episode.mkv", size=5_000_000_000)
+    event = FakeEvent(
+        filename="episode.mkv",
+        size=5_000_000_000,
+        width=1920,
+        height=816,
+        duration=3319.92,
+    )
 
     await handlers.handle_message(event)
 
@@ -196,6 +216,7 @@ async def test_receives_large_video_without_bot_api_file_identifiers() -> None:
         "message_id": 1,
         "filename": "episode.mkv",
         "expected_size": 5_000_000_000,
+        "metadata": VideoMetadata(1920, 816, 3319.92),
         "caption": "",
     }
 

@@ -41,6 +41,13 @@ class QuickStage(StrEnum):
 
 
 @dataclass(frozen=True, slots=True)
+class VideoMetadata:
+    width: int | None = None
+    height: int | None = None
+    duration_seconds: float | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class EditorialHint:
     title: str
     year: int
@@ -90,6 +97,7 @@ class ImportFile:
     downloaded_bytes: int = 0
     download_speed_bps: float = 0.0
     download_eta_seconds: int | None = None
+    metadata: VideoMetadata | None = None
 
 
 @dataclass(frozen=True, slots=True)

@@ -8,6 +8,7 @@ from taskflow_telegram_importer.sessions import (
     ImportMode,
     ImportSession,
     SessionState,
+    VideoMetadata,
 )
 from taskflow_telegram_importer.telegram.rendering import render_session
 
@@ -116,3 +117,40 @@ def test_download_status_shows_each_file_progress_speed_eta_and_queue() -> None:
     assert "4.8 MiB/s · ETA 10s" in rendered.text
     assert "two.mkv · in coda #1" in rendered.text
     assert "Aggiornamento ogni 30 secondi" in rendered.text
+
+
+def test_collecting_panel_shows_metadata_for_all_files_in_arrival_order() -> None:
+    session = replace(
+        _session(),
+        files=(
+            ImportFile(
+                1,
+                "first.mp4",
+                2_311_467_422,
+                FileState.RECEIVED,
+                metadata=VideoMetadata(1920, 816, 3319.92),
+            ),
+            ImportFile(
+                2,
+                "second.mkv",
+                734_003_200,
+                FileState.RECEIVED,
+                metadata=VideoMetadata(),
+            ),
+        ),
+    )
+
+    rendered = render_session(session)
+
+    first = rendered.text.index("1. first.mp4 · raccolto")
+    second = rendered.text.index("2. second.mkv · raccolto")
+    assert first < second
+    assert "1920×816 · 55m 20s · ~5.57 Mbit/s · 2.15 GiB" in rendered.text
+    assert (
+        "risoluzione non disponibile · durata non disponibile · "
+        "bitrate non disponibile · 700.0 MiB"
+    ) in rendered.text
+    assert rendered.buttons[-2:] == (
+        ("Ho finito di inoltrare · 2 file", "finish:abc123"),
+        ("Elimina intera sessione", "delete-request:abc123"),
+    )

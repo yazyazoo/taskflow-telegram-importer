@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from taskflow_telegram_importer.sessions import (
-    FileState, ImportMode, ImportSession, QuickStage, SessionState,
+    FileState, ImportFile, ImportMode, ImportSession, QuickStage, SessionState,
 )
 
 
@@ -40,7 +40,7 @@ def render_session(
                 lines.append(f"Errore: {session.quick.error}")
 
     queued = 0
-    for file in session.files:
+    for position, file in enumerate(session.files, start=1):
         if file.state is FileState.DOWNLOADING:
             total = file.expected_size
             percent = file.downloaded_bytes / total * 100 if total else 0.0
@@ -54,8 +54,12 @@ def render_session(
                 detail += f" · ETA {_duration(file.download_eta_seconds)}"
             lines.append(detail)
         elif file.state is FileState.RECEIVED:
-            queued += 1
-            lines.append(f"{file.filename} · in coda #{queued}")
+            if session.state is SessionState.COLLECTING:
+                lines.append(f"{position}. {file.filename} · raccolto")
+                lines.append(f"   {_technical_metadata(file)}")
+            else:
+                queued += 1
+                lines.append(f"{file.filename} · in coda #{queued}")
         elif file.state in {FileState.COMPLETE, FileState.PUBLISHED}:
             lines.append(f"{file.filename} · completato")
         elif file.state is FileState.FAILED:
@@ -154,3 +158,42 @@ def _duration(seconds: int) -> str:
     if minutes:
         return f"{minutes}m {remainder:02d}s"
     return f"{remainder}s"
+
+
+def _technical_metadata(file: ImportFile) -> str:
+    metadata = file.metadata
+    if (
+        metadata is not None
+        and metadata.width is not None
+        and metadata.height is not None
+    ):
+        resolution = f"{metadata.width}×{metadata.height}"
+    else:
+        resolution = "risoluzione non disponibile"
+
+    if metadata is not None and metadata.duration_seconds is not None:
+        duration = _duration(round(metadata.duration_seconds))
+    else:
+        duration = "durata non disponibile"
+
+    if (
+        metadata is not None
+        and metadata.duration_seconds is not None
+        and file.expected_size > 0
+    ):
+        bitrate = file.expected_size * 8 / metadata.duration_seconds / 1_000_000
+        bitrate_text = f"~{bitrate:.2f} Mbit/s"
+    else:
+        bitrate_text = "bitrate non disponibile"
+
+    return (
+        f"{resolution} · {duration} · {bitrate_text} · "
+        f"{_file_size(file.expected_size)}"
+    )
+
+
+def _file_size(value: int) -> str:
+    gibibyte = 1024 ** 3
+    if value >= gibibyte:
+        return f"{value / gibibyte:.2f} GiB"
+    return f"{_mib(value):.1f} MiB"

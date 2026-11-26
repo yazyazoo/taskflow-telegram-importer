@@ -32,7 +32,12 @@ Internal levels are:
 - `WARNING`: recovered or degraded outcomes;
 - `ERROR`: terminal file/session failures.
 
-The status panel lists every active, queued, complete, failed, or excluded
+Before downloading, the collecting-session panel lists every file in arrival
+order with the exact Telegram resolution, duration, estimated average bitrate,
+and size. Missing Telegram metadata is shown as unavailable and never blocks
+the session. This inspection does not download media bytes.
+
+The status panel also lists every active, queued, complete, failed, or excluded
 file. Active transfers show bytes, percentage, speed, and ETA at the configured
 refresh interval. Credentials are redacted from logs. The importer does not
 extract 7z archives yet.

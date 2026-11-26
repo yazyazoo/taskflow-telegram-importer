@@ -22,7 +22,12 @@ configurata. Un file fallito può essere ritentato o escluso.
 I file pubblicati potrebbero essere già usati da TaskFlow: l'operatore deve
 verificarlo prima della cancellazione.
 
-Il pannello elenca file attivi, in coda, completi, falliti ed esclusi; per i
-download attivi mostra byte, percentuale, velocità ed ETA. I log usano `DEBUG`,
-`INFO`, `WARNING` ed `ERROR`; token, `api_id` e `api_hash` non vengono stampati.
-Il servizio non estrae ancora 7z.
+Prima del download, il pannello della sessione in raccolta elenca tutti i file
+nell'ordine di arrivo e mostra risoluzione Telegram esatta, durata, bitrate
+medio stimato e dimensione. I metadati assenti sono indicati come non
+disponibili e non bloccano la sessione. Questa lettura non scarica byte video.
+
+Il pannello elenca inoltre file attivi, in coda, completi, falliti ed esclusi;
+per i download attivi mostra byte, percentuale, velocità ed ETA. I log usano
+`DEBUG`, `INFO`, `WARNING` ed `ERROR`; token, `api_id` e `api_hash` non vengono
+stampati. Il servizio non estrae ancora 7z.

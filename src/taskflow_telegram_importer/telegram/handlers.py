@@ -9,6 +9,7 @@ from taskflow_telegram_importer.imports import ImportService
 from taskflow_telegram_importer.sessions import FileState, SessionState
 
 from .messages import operator_error_message
+from .metadata import extract_video_metadata
 from .rendering import RenderedStatus, render_session
 
 
@@ -71,6 +72,7 @@ class TelegramHandlers:
                     message_id=int(message.id),
                     filename=filename,
                     expected_size=int(getattr(media_file, "size", 0) or 0),
+                    metadata=extract_video_metadata(media_file),
                     caption=caption,
                 )
             elif getattr(message, "photo", None) is not None and caption:

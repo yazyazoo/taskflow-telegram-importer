@@ -21,6 +21,7 @@ from taskflow_telegram_importer.sessions import (
     QuickWorkflowDraft,
     SessionRepository,
     SessionState,
+    VideoMetadata,
     WorkflowPreset,
     parse_editorial_hint,
 )
@@ -79,6 +80,7 @@ class ImportService:
         message_id: int,
         filename: str,
         expected_size: int,
+        metadata: VideoMetadata | None = None,
         caption: str | None = None,
     ) -> ImportSession:
         existing = self._find_message(chat_id, message_id)
@@ -92,6 +94,7 @@ class ImportService:
             filename=filename,
             expected_size=expected_size,
             state=FileState.RECEIVED,
+            metadata=metadata,
         )
         captions = session.captions + ((caption,) if caption and caption.strip() else ())
         session = replace(session, files=session.files + (file,), captions=captions)
