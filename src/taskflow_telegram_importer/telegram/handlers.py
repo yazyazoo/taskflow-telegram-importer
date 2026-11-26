@@ -29,7 +29,7 @@ class TelegramHandlers:
         self._extensions = frozenset(value.lower() for value in allowed_extensions)
         self._taskflow_webui_url = taskflow_webui_url
         self._refresh_seconds = refresh_seconds
-        self._status_messages: dict[int, tuple[int, int]] = {}
+        self._status_messages: dict[int, tuple[str, int, int]] = {}
         self._editing: dict[int, tuple[str, str] | str] = {}
         self._terminal_notifications: set[tuple[str, str]] = set()
         service.add_listener(self.session_changed)
@@ -171,11 +171,11 @@ class TelegramHandlers:
 
     async def session_changed(self, session) -> None:
         current = self._status_messages.get(session.user_id)
-        if current is None:
+        if current is None or current[0] != session.session_id:
             return
         rendered = render_session(session, refresh_seconds=self._refresh_seconds)
         await self._client.edit_message(
-            current[0], current[1], rendered.text, buttons=_buttons(rendered)
+            current[1], current[2], rendered.text, buttons=_buttons(rendered)
         )
         await self._notify_terminal_state(session)
 
@@ -210,7 +210,7 @@ class TelegramHandlers:
         if current is None:
             return
         try:
-            await self._client.delete_messages(current[0], [current[1]])
+            await self._client.delete_messages(current[1], [current[2]])
         except Exception:
             pass
 
@@ -228,10 +228,10 @@ class TelegramHandlers:
             refresh_seconds=self._refresh_seconds,
         )
         current = self._status_messages.get(user_id)
-        if current is not None:
+        if current is not None and current[0] == session.session_id:
             try:
                 await self._client.edit_message(
-                    current[0], current[1], rendered.text, buttons=_buttons(rendered)
+                    current[1], current[2], rendered.text, buttons=_buttons(rendered)
                 )
                 return
             except Exception:
@@ -239,7 +239,7 @@ class TelegramHandlers:
         sent = await self._client.send_message(
             chat_id, rendered.text, buttons=_buttons(rendered)
         )
-        self._status_messages[user_id] = (chat_id, int(sent.id))
+        self._status_messages[user_id] = (session.session_id, chat_id, int(sent.id))
 
     async def _notify_terminal_state(self, session) -> None:
         failed = tuple(

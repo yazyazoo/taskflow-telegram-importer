@@ -237,11 +237,27 @@ async def test_status_updates_edit_one_existing_message() -> None:
 
 
 @pytest.mark.asyncio
+async def test_new_session_sends_a_new_status_message_for_the_same_user() -> None:
+    handlers, service, client = _handlers()
+
+    await handlers.handle_message(FakeEvent(filename="one.mkv", size=5))
+    service.session = ImportSession("def456", 20, 10, SessionState.COLLECTING)
+    await handlers.handle_message(
+        FakeEvent(message_id=2, filename="two.mkv", size=5)
+    )
+
+    assert len(client.sent) == 2
+    assert client.edits == []
+    assert "Sessione abc123" in client.sent[0][1]
+    assert "Sessione def456" in client.sent[1][1]
+
+
+@pytest.mark.asyncio
 async def test_metadata_edit_creates_new_sequential_status_panel() -> None:
     handlers, service, client = _handlers()
     service.session = replace(service.session, state=SessionState.SEALED)
     handlers._editing[10] = "abc123"
-    handlers._status_messages[10] = (20, 700)
+    handlers._status_messages[10] = ("abc123", 20, 700)
 
     await handlers.handle_message(FakeEvent(text="Cape Fear | 2025"))
 
