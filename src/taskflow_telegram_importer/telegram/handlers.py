@@ -161,6 +161,7 @@ class TelegramHandlers:
             elif action == "delete-confirm":
                 await self._service.delete_session(session_id, user_id)
                 await event.edit("Sessione eliminata.", buttons=None)
+                self._editing.pop(user_id, None)
                 self._status_messages.pop(user_id, None)
                 return
             elif action == "show":
@@ -202,10 +203,17 @@ class TelegramHandlers:
             await self._delete_previous_status(user_id)
             await self._client.send_message(chat_id, confirmation)
             await self._show_status(user_id, chat_id, session)
-        except (ValueError, ImporterError):
+        except ValueError:
             await self._client.send_message(
                 chat_id, "Formato non valido. Usa: Titolo | Anno"
             )
+        except ImporterError as exc:
+            message = (
+                "Nessun match TMDB trovato."
+                if str(exc) == "TMDB search returned no candidates"
+                else operator_error_message(exc)
+            )
+            await self._client.send_message(chat_id, message)
 
     async def _delete_previous_status(self, user_id: int) -> None:
         current = self._status_messages.pop(user_id, None)

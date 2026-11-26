@@ -315,6 +315,24 @@ async def test_quick_branch_asks_kind_then_searches_tmdb_without_downloading() -
 
 
 @pytest.mark.asyncio
+async def test_tmdb_no_candidates_is_not_reported_as_invalid_input_format() -> None:
+    service = ServiceStub()
+
+    async def search_without_candidates(session_id, user_id, title, year):
+        raise ImporterError("TMDB search returned no candidates")
+
+    service.search_quick = search_without_candidates
+    handlers, _, client = _handlers(service)
+    handlers._editing[10] = ("quick-query", "abc123")
+
+    await handlers.handle_message(
+        FakeEvent(text="Nanuq: An Arctic Journey from Past to Future | 2020")
+    )
+
+    assert client.sent[-1][1] == "Nessun match TMDB trovato."
+
+
+@pytest.mark.asyncio
 async def test_delete_requires_explicit_confirmation() -> None:
     handlers, service, _ = _handlers()
 
@@ -326,3 +344,24 @@ async def test_delete_requires_explicit_confirmation() -> None:
 
     assert ("delete", "abc123", 10) in service.calls
     assert event.edits[0][0] == "Sessione eliminata."
+
+
+@pytest.mark.asyncio
+async def test_confirmed_delete_clears_pending_text_input_for_next_session() -> None:
+    handlers, service, client = _handlers()
+    handlers._editing[10] = ("quick-query", "abc123")
+
+    await handlers.handle_callback(FakeEvent(data="delete-confirm:abc123"))
+    service.session = ImportSession("def456", 20, 10, SessionState.COLLECTING)
+    await handlers.handle_message(
+        FakeEvent(
+            message_id=2,
+            filename="next.mkv",
+            size=100,
+            caption="Nanuq: An Arctic Journey from Past to Future (2020)",
+        )
+    )
+
+    assert 10 not in handlers._editing
+    assert service.calls[-1][0] == "video"
+    assert all(message != "Formato non valido. Usa: Titolo | Anno" for _, message, _ in client.sent)
