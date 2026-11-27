@@ -273,8 +273,8 @@ async def test_new_session_sends_a_new_status_message_for_the_same_user() -> Non
     await service.listeners[0](second_session)
 
     assert len(client.sent) == 2
-    assert "Sessione abc123" in client.sent[0][1]
-    assert "Sessione def456" in client.sent[1][1]
+    assert "📦 SESSIONE\nabc123" in client.sent[0][1]
+    assert "📦 SESSIONE\ndef456" in client.sent[1][1]
     assert [edit[1] for edit in client.edits] == [901, 902]
 
 
@@ -290,7 +290,7 @@ async def test_metadata_edit_creates_new_sequential_status_panel() -> None:
     assert service.calls[-1] == ("edit", "abc123", 10, "Cape Fear", 2025)
     assert client.deletes == [(20, (700,))]
     assert client.sent[0][1] == "Titolo e anno aggiornati."
-    assert "Titolo: Cape Fear (2025)" in client.sent[1][1]
+    assert "Cape Fear (2025)" in client.sent[1][1]
 
 
 @pytest.mark.asyncio

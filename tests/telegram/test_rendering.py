@@ -35,9 +35,11 @@ def _session(
 def test_collecting_status_shows_concurrent_counts_and_finish_action() -> None:
     rendered = render_session(_session())
 
-    assert "File: 2" in rendered.text
-    assert "Completati: 1" in rendered.text
-    assert "Falliti: 1" in rendered.text
+    assert rendered.text.startswith("📦 SESSIONE\nabc123")
+    assert "━━━━━━━━━━━━━━━━━━━━\n🎬 CONTENUTO" in rendered.text
+    assert "━━━━━━━━━━━━━━━━━━━━\n📊 RIEPILOGO" in rendered.text
+    assert "━━━━━━━━━━━━━━━━━━━━\n📁 FILE 1/2" in rendered.text
+    assert "File: 2  ·  ✅ 1  ·  ❌ 1  ·  ⏭ 0" in rendered.text
     assert ("Ho finito di inoltrare · 2 file", "finish:abc123") in rendered.buttons
     assert ("Riprova two.mkv", "retry:abc123:2") in rendered.buttons
     assert ("Escludi two.mkv", "exclude:abc123:2") in rendered.buttons
@@ -113,9 +115,12 @@ def test_download_status_shows_each_file_progress_speed_eta_and_queue() -> None:
 
     rendered = render_session(session, refresh_seconds=30)
 
-    assert "one.mkv · download 50.0% · 47.7 MiB / 95.4 MiB" in rendered.text
-    assert "4.8 MiB/s · ETA 10s" in rendered.text
-    assert "two.mkv · in coda #1" in rendered.text
+    assert "⬇️ DOWNLOAD\n• Stato: in corso" in rendered.text
+    assert "• Progresso: 50.0% · 47.7 MiB / 95.4 MiB" in rendered.text
+    assert "• Velocità: 4.8 MiB/s" in rendered.text
+    assert "• ETA: 10s" in rendered.text
+    assert "📁 FILE 2/2\n\ntwo.mkv" in rendered.text
+    assert "• Stato: in coda #1" in rendered.text
     assert "Aggiornamento ogni 30 secondi" in rendered.text
 
 
@@ -142,14 +147,18 @@ def test_collecting_panel_shows_metadata_for_all_files_in_arrival_order() -> Non
 
     rendered = render_session(session)
 
-    first = rendered.text.index("1. first.mp4 · raccolto")
-    second = rendered.text.index("2. second.mkv · raccolto")
+    first = rendered.text.index("📁 FILE 1/2\n\nfirst.mp4")
+    second = rendered.text.index("📁 FILE 2/2\n\nsecond.mkv")
     assert first < second
-    assert "1920×816 · 55m 20s · ~5.57 Mbit/s · 2.15 GiB" in rendered.text
-    assert (
-        "risoluzione non disponibile · durata non disponibile · "
-        "bitrate non disponibile · 700.0 MiB"
-    ) in rendered.text
+    assert "🎞 METADATI VIDEO" in rendered.text
+    assert "• Risoluzione: 1920 × 816" in rendered.text
+    assert "• Durata: 55m 20s" in rendered.text
+    assert "• Dimensione: 2.15 GiB" in rendered.text
+    assert "• Bitrate stimato: ~5.57 Mbit/s" in rendered.text
+    assert "• Risoluzione: non disponibile" in rendered.text
+    assert "• Durata: non disponibile" in rendered.text
+    assert "• Dimensione: 700.0 MiB" in rendered.text
+    assert "• Bitrate stimato: non disponibile" in rendered.text
     assert rendered.buttons[-2:] == (
         ("Ho finito di inoltrare · 2 file", "finish:abc123"),
         ("Elimina intera sessione", "delete-request:abc123"),
