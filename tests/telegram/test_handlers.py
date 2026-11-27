@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from dataclasses import replace
 from types import SimpleNamespace
 
@@ -122,6 +123,19 @@ class FakeClient:
     async def send_message(self, chat_id, text, *, buttons=None):
         self.sent.append((chat_id, text, buttons))
         return SimpleNamespace(id=900 + len(self.sent))
+
+
+class DelayedFirstSendClient(FakeClient):
+    def __init__(self) -> None:
+        super().__init__()
+        self.first_send_started = asyncio.Event()
+        self.release_first_send = asyncio.Event()
+
+    async def send_message(self, chat_id, text, *, buttons=None):
+        if not self.sent and not self.first_send_started.is_set():
+            self.first_send_started.set()
+            await self.release_first_send.wait()
+        return await super().send_message(chat_id, text, buttons=buttons)
 
 
 class FakeEvent:
@@ -255,6 +269,37 @@ async def test_status_updates_edit_one_existing_message() -> None:
     assert len(client.sent) == 1
     assert len(client.edits) == 2
     assert client.edits[-1][1] == 901
+
+
+@pytest.mark.asyncio
+async def test_concurrent_files_share_one_status_message() -> None:
+    service = ServiceStub()
+    client = DelayedFirstSendClient()
+    handlers = TelegramHandlers(
+        service,
+        client,
+        (10,),
+        (".mkv",),
+        taskflow_webui_url="https://taskflow.redprimrose.mov/ui/telegram-ui/",
+        refresh_seconds=30,
+    )
+
+    first = asyncio.create_task(
+        handlers.handle_message(FakeEvent(filename="one.mkv", size=5))
+    )
+    await client.first_send_started.wait()
+    second = asyncio.create_task(
+        handlers.handle_message(
+            FakeEvent(message_id=2, filename="two.mkv", size=5)
+        )
+    )
+    await asyncio.sleep(0)
+    client.release_first_send.set()
+    await asyncio.gather(first, second)
+
+    assert len(client.sent) == 1
+    assert len(client.edits) == 1
+    assert client.edits[0][1] == 901
 
 
 @pytest.mark.asyncio

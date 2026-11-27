@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 
 from telethon import Button
@@ -31,6 +32,7 @@ class TelegramHandlers:
         self._taskflow_webui_url = taskflow_webui_url
         self._refresh_seconds = refresh_seconds
         self._status_messages: dict[str, tuple[int, int]] = {}
+        self._status_locks: dict[str, asyncio.Lock] = {}
         self._editing: dict[int, tuple[str, str] | str] = {}
         self._terminal_notifications: set[tuple[str, str]] = set()
         service.add_listener(self.session_changed)
@@ -232,24 +234,26 @@ class TelegramHandlers:
         *,
         confirm_delete: bool = False,
     ) -> None:
-        rendered = render_session(
-            session,
-            confirm_delete=confirm_delete,
-            refresh_seconds=self._refresh_seconds,
-        )
-        current = self._status_messages.get(session.session_id)
-        if current is not None:
-            try:
-                await self._client.edit_message(
-                    current[0], current[1], rendered.text, buttons=_buttons(rendered)
-                )
-                return
-            except Exception:
-                self._status_messages.pop(session.session_id, None)
-        sent = await self._client.send_message(
-            chat_id, rendered.text, buttons=_buttons(rendered)
-        )
-        self._status_messages[session.session_id] = (chat_id, int(sent.id))
+        lock = self._status_locks.setdefault(session.session_id, asyncio.Lock())
+        async with lock:
+            rendered = render_session(
+                session,
+                confirm_delete=confirm_delete,
+                refresh_seconds=self._refresh_seconds,
+            )
+            current = self._status_messages.get(session.session_id)
+            if current is not None:
+                try:
+                    await self._client.edit_message(
+                        current[0], current[1], rendered.text, buttons=_buttons(rendered)
+                    )
+                    return
+                except Exception:
+                    self._status_messages.pop(session.session_id, None)
+            sent = await self._client.send_message(
+                chat_id, rendered.text, buttons=_buttons(rendered)
+            )
+            self._status_messages[session.session_id] = (chat_id, int(sent.id))
 
     async def _notify_terminal_state(self, session) -> None:
         failed = tuple(
