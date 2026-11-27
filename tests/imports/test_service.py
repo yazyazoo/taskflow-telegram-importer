@@ -18,10 +18,21 @@ from taskflow_telegram_importer.sessions import (
 
 
 class TmdbStub:
+    def __init__(self) -> None:
+        self.details_calls = []
+
     async def search(self, media_kind, title, year):
         from taskflow_telegram_importer.sessions import TmdbCandidate
 
         return (TmdbCandidate(42, "Cape Fear", "Cape Fear", 2025, "", None),)
+
+    async def details(self, media_kind, tmdb_id):
+        from taskflow_telegram_importer.sessions import TmdbCandidate
+
+        self.details_calls.append((media_kind, tmdb_id))
+        return TmdbCandidate(
+            42, "Cape Fear", "Cape Fear", 2025, "", None, ("Dramma",)
+        )
 
 
 class TaskFlowStub:
@@ -174,8 +185,9 @@ def test_manual_branch_starts_all_downloads_only_after_collection_is_closed(
 async def test_quick_branch_collects_tmdb_and_preset_before_starting_downloads(
     tmp_path: Path,
 ) -> None:
+    tmdb = TmdbStub()
     service, _, _, coordinator = _service(
-        tmp_path, tmdb_client=TmdbStub(), taskflow_client=TaskFlowStub()
+        tmp_path, tmdb_client=tmdb, taskflow_client=TaskFlowStub()
     )
     first = _receive(service, 1)
     service.finish_collection(10)
@@ -187,6 +199,8 @@ async def test_quick_branch_collects_tmdb_and_preset_before_starting_downloads(
     ready = service.select_quick_preset(first.session_id, 10, "direct-media")
 
     assert searched.quick.candidates[0].tmdb_id == 42
+    assert tmdb.details_calls == [("tv", 42)]
+    assert selected.quick.candidates[0].genres == ("Dramma",)
     assert selected.quick.presets[0].code == "direct-media"
     assert ready.quick.stage.value == "ready"
     assert coordinator.started == []

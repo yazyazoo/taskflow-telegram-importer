@@ -7,8 +7,12 @@ from taskflow_telegram_importer.sessions import (
     ImportFile,
     ImportMode,
     ImportSession,
+    QuickStage,
+    QuickWorkflowDraft,
     SessionState,
+    TmdbCandidate,
     VideoMetadata,
+    WorkflowPreset,
 )
 from taskflow_telegram_importer.telegram.rendering import render_session
 
@@ -122,6 +126,33 @@ def test_download_status_shows_each_file_progress_speed_eta_and_queue() -> None:
     assert "📁 FILE 2/2\n\ntwo.mkv" in rendered.text
     assert "• Stato: in coda #1" in rendered.text
     assert "Aggiornamento ogni 30 secondi" in rendered.text
+
+
+def test_selected_tmdb_candidate_shows_genres_in_quick_workflow_summary() -> None:
+    candidate = TmdbCandidate(
+        1847777,
+        "Nanuq: An Arctic Journey from Past to Future",
+        "Nanuq: An Arctic Journey from Past to Future",
+        2020,
+        "",
+        None,
+        ("Documentario",),
+    )
+    session = replace(
+        _session(SessionState.SEALED),
+        mode=ImportMode.QUICK,
+        quick=QuickWorkflowDraft(
+            stage=QuickStage.PRESET,
+            media_kind="movie",
+            candidates=(candidate,),
+            selected_tmdb_id=1847777,
+            presets=(WorkflowPreset("direct-media", "Direct media"),),
+        ),
+    )
+
+    rendered = render_session(session)
+
+    assert "TMDB 1847777 · Generi: Documentario" in rendered.text
 
 
 def test_collecting_panel_shows_metadata_for_all_files_in_arrival_order() -> None:

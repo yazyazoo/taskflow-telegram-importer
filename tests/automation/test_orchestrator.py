@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from taskflow_telegram_importer.automation import QuickWorkflowOrchestrator
+from taskflow_telegram_importer.errors import ImporterError
 from taskflow_telegram_importer.sessions import (
     EditorialHint,
     FileState,
@@ -35,7 +36,7 @@ class TaskFlowStub:
 async def test_quick_orchestrator_uses_persisted_selection_and_package_ids() -> None:
     taskflow = TaskFlowStub()
     orchestrator = QuickWorkflowOrchestrator(taskflow)
-    candidate = TmdbCandidate(42, "Show", "Show", 2026, "", None)
+    candidate = TmdbCandidate(42, "Show", "Show", 2026, "", None, ("Dramma",))
     draft = QuickWorkflowDraft(
         stage=QuickStage.PUBLISHED,
         media_kind="tv",
@@ -70,3 +71,32 @@ async def test_quick_orchestrator_uses_persisted_selection_and_package_ids() -> 
         "media_kind": "tv",
         "tmdb": {"tmdb_id": 42},
     }
+
+
+@pytest.mark.asyncio
+async def test_quick_orchestrator_rejects_selection_without_genres() -> None:
+    taskflow = TaskFlowStub()
+    orchestrator = QuickWorkflowOrchestrator(taskflow)
+    candidate = TmdbCandidate(42, "Show", "Show", 2026, "", None)
+    session = ImportSession(
+        "session",
+        20,
+        10,
+        SessionState.PUBLISHED,
+        files=(ImportFile(1, "episode.mkv", 123, FileState.PUBLISHED),),
+        editorial_hint=EditorialHint("Show", 2026),
+        mode=ImportMode.QUICK,
+        quick=QuickWorkflowDraft(
+            stage=QuickStage.PUBLISHED,
+            media_kind="tv",
+            candidates=(candidate,),
+            selected_tmdb_id=42,
+            preset_code="direct-media",
+        ),
+        published_paths=(Path("/gate/Show_2026/episode.mkv"),),
+    )
+
+    with pytest.raises(ImporterError, match="genres"):
+        await orchestrator.execute(session)
+
+    assert taskflow.payload is None

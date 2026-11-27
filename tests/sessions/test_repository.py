@@ -16,6 +16,7 @@ from taskflow_telegram_importer.sessions import (
     QuickWorkflowDraft,
     SessionRepository,
     SessionState,
+    TmdbCandidate,
     VideoMetadata,
 )
 
@@ -106,6 +107,17 @@ def test_manifest_round_trip_preserves_quick_workflow_draft(tmp_path: Path) -> N
             media_kind="tv",
             query_title="Cape Fear",
             query_year=2025,
+            candidates=(
+                TmdbCandidate(
+                    42,
+                    "Cape Fear",
+                    "Cape Fear",
+                    2025,
+                    "",
+                    None,
+                    ("Dramma", "Mistero"),
+                ),
+            ),
             selected_tmdb_id=42,
             preset_code="direct-media",
         ),

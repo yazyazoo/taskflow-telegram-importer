@@ -61,6 +61,7 @@ class TmdbCandidate:
     year: int
     overview: str
     poster_path: str | None
+    genres: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)

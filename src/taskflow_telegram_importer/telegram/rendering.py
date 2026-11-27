@@ -62,6 +62,18 @@ def _content_lines(session: ImportSession) -> list[str]:
         lines.append("Ramo: Quick Workflow")
         if session.quick is not None:
             lines.append(f"Quick Workflow: {session.quick.stage.value}")
+            selected = next(
+                (
+                    item
+                    for item in session.quick.candidates
+                    if item.tmdb_id == session.quick.selected_tmdb_id
+                ),
+                None,
+            )
+            if selected is not None and selected.genres:
+                lines.append(
+                    f"TMDB {selected.tmdb_id} · Generi: {', '.join(selected.genres)}"
+                )
             if session.quick.workflow_id:
                 lines.append(f"Workflow TaskFlow: {session.quick.workflow_id}")
             if session.quick.error:

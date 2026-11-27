@@ -191,6 +191,9 @@ class ImportService:
         )
         if candidate is None:
             raise ImporterError("TMDB candidate is unavailable")
+        if self._tmdb is None or session.quick.media_kind not in {"movie", "tv"}:
+            raise ImporterError("TMDB details are unavailable")
+        candidate = await self._tmdb.details(session.quick.media_kind, tmdb_id)
         if self._taskflow is None:
             raise ImporterError("TaskFlow preset catalog is unavailable")
         documents = await self._taskflow.list_presets()
@@ -207,6 +210,10 @@ class ImportService:
             quick=replace(
                 session.quick,
                 stage=QuickStage.PRESET,
+                candidates=tuple(
+                    candidate if item.tmdb_id == tmdb_id else item
+                    for item in session.quick.candidates
+                ),
                 selected_tmdb_id=tmdb_id,
                 presets=presets,
             ),

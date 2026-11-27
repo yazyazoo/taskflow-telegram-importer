@@ -31,6 +31,8 @@ class QuickWorkflowOrchestrator:
         )
         if selected is None:
             raise ImporterError("selected TMDB candidate is unavailable")
+        if not selected.genres:
+            raise ImporterError("selected TMDB candidate has no genres")
         published_files = tuple(
             item for item in session.files if item.state is FileState.PUBLISHED
         )

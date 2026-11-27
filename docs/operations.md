@@ -9,6 +9,12 @@ download starts while the session is collecting. Press
 - `Quick Workflow` asks for media kind, title/year, TMDB candidate, TaskFlow
   preset and optional cleanup/sub-ita overrides before downloads start.
 
+After the operator selects a TMDB search result, the importer reads that
+record's localized details. At least one named genre is required before the
+Quick Workflow can continue. The selected TMDB ID and genres remain visible in
+the persisted Telegram session; TaskFlow still receives the canonical TMDB ID
+and resolves its own task output.
+
 After Quick downloads complete, the importer publishes to the filesystem gate,
 requests integration reconciliation, reads the resulting package IDs, and only
 then calls TaskFlow Create and Start. The workflow ID returned by TaskFlow is

@@ -59,8 +59,30 @@ class TmdbClient:
             raise ImporterError("TMDB search returned no candidates")
         return candidates
 
+    async def details(
+        self, media_kind: Literal["movie", "tv"], tmdb_id: int
+    ) -> TmdbCandidate:
+        if media_kind not in {"movie", "tv"}:
+            raise ImporterError("media kind must be movie or tv")
+        if isinstance(tmdb_id, bool) or not isinstance(tmdb_id, int) or tmdb_id <= 0:
+            raise ImporterError("TMDB ID must be a positive integer")
+        response = await self._transport.request(
+            "GET",
+            f"{self._base_url}/{media_kind}/{tmdb_id}",
+            query={"api_key": self._api_key, "language": self._language},
+            timeout_seconds=self._timeout_seconds,
+        )
+        if response.status != 200 or not isinstance(response.data, dict):
+            raise ImporterError("TMDB details failed")
+        candidate = _candidate(response.data, media_kind, genres=_genres(response.data))
+        if candidate is None or candidate.tmdb_id != tmdb_id:
+            raise ImporterError("TMDB details returned invalid data")
+        return candidate
 
-def _candidate(value: Any, media_kind: str) -> TmdbCandidate | None:
+
+def _candidate(
+    value: Any, media_kind: str, *, genres: tuple[str, ...] = ()
+) -> TmdbCandidate | None:
     if not isinstance(value, dict) or not isinstance(value.get("id"), int):
         return None
     title_key = "title" if media_kind == "movie" else "name"
@@ -84,4 +106,21 @@ def _candidate(value: Any, media_kind: str) -> TmdbCandidate | None:
         year=year,
         overview=overview.strip() if isinstance(overview, str) else "",
         poster_path=poster if isinstance(poster, str) else None,
+        genres=genres,
     )
+
+
+def _genres(value: dict[str, Any]) -> tuple[str, ...]:
+    raw = value.get("genres")
+    if not isinstance(raw, list) or not raw:
+        raise ImporterError("TMDB details returned no genres")
+    genres = tuple(
+        name
+        for item in raw
+        if isinstance(item, dict)
+        and isinstance(item.get("name"), str)
+        and (name := item["name"].strip())
+    )
+    if not genres:
+        raise ImporterError("TMDB details returned no genres")
+    return genres

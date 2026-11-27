@@ -9,6 +9,12 @@ rami:
 - `Quick Workflow` chiede media kind, titolo/anno, candidato TMDB, preset e
   override prima di avviare i download.
 
+Dopo la scelta del risultato, il bot legge i dettagli localizzati del solo
+candidato TMDB selezionato. Per proseguire è necessario almeno un genere con
+nome valido. ID TMDB e generi restano visibili nella sessione Telegram
+persistita; TaskFlow continua a ricevere l'ID TMDB canonico e genera
+autonomamente l'output del proprio task.
+
 Nel ramo Quick, dopo la pubblicazione il bot forza la riconciliazione
 filesystem, legge i package ID generati da TaskFlow e soltanto allora esegue
 Create e Start. L'ID workflow restituito viene mostrato nel bot.

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pytest
 
+from taskflow_telegram_importer.errors import ImporterError
 from taskflow_telegram_importer.http import JsonResponse
 from taskflow_telegram_importer.tmdb import TmdbClient
 
@@ -69,3 +70,58 @@ async def test_search_tv_uses_first_air_date_and_limits_results() -> None:
 
     assert len(candidates) == 3
     assert transport.calls[0][3]["first_air_date_year"] == "2026"
+
+
+@pytest.mark.asyncio
+async def test_details_returns_localized_candidate_with_genres() -> None:
+    transport = TransportStub({
+        "id": 1847777,
+        "title": "Nanuq: An Arctic Journey from Past to Future",
+        "original_title": "Nanuq: An Arctic Journey from Past to Future",
+        "release_date": "2020-12-17",
+        "overview": "Viaggio nell'Artico.",
+        "poster_path": "/nanuq.jpg",
+        "genres": [{"id": 99, "name": "Documentario"}],
+    })
+    client = TmdbClient(
+        transport,
+        base_url="https://api.themoviedb.org/3",
+        api_key="secret-key",
+        language="it-IT",
+        timeout_seconds=12,
+        max_results=5,
+    )
+
+    candidate = await client.details("movie", 1847777)
+
+    assert candidate.tmdb_id == 1847777
+    assert candidate.genres == ("Documentario",)
+    assert transport.calls[0][1].endswith("/movie/1847777")
+    assert transport.calls[0][3] == {
+        "api_key": "secret-key",
+        "language": "it-IT",
+    }
+
+
+@pytest.mark.asyncio
+async def test_details_rejects_missing_genres() -> None:
+    transport = TransportStub({
+        "id": 1847777,
+        "title": "Nanuq",
+        "original_title": "Nanuq",
+        "release_date": "2020-12-17",
+        "overview": "",
+        "poster_path": None,
+        "genres": [],
+    })
+    client = TmdbClient(
+        transport,
+        base_url="https://api.themoviedb.org/3",
+        api_key="key",
+        language="it-IT",
+        timeout_seconds=30,
+        max_results=5,
+    )
+
+    with pytest.raises(ImporterError, match="genres"):
+        await client.details("movie", 1847777)

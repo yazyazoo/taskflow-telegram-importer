@@ -187,6 +187,7 @@ def _encode_quick(draft: QuickWorkflowDraft | None) -> dict[str, Any] | None:
                 "year": item.year,
                 "overview": item.overview,
                 "poster_path": item.poster_path,
+                "genres": list(item.genres),
             }
             for item in draft.candidates
         ],
@@ -218,6 +219,7 @@ def _decode_session(raw: dict[str, Any]) -> ImportSession:
             TmdbCandidate(
                 int(item["tmdb_id"]), str(item["title"]), str(item["original_title"]),
                 int(item["year"]), str(item["overview"]), item.get("poster_path"),
+                tuple(str(value) for value in item.get("genres", [])),
             )
             for item in quick_raw.get("candidates", [])
         ),
