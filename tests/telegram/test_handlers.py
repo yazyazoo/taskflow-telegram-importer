@@ -262,15 +262,20 @@ async def test_new_session_sends_a_new_status_message_for_the_same_user() -> Non
     handlers, service, client = _handlers()
 
     await handlers.handle_message(FakeEvent(filename="one.mkv", size=5))
+    first_session = service.session
     service.session = ImportSession("def456", 20, 10, SessionState.COLLECTING)
     await handlers.handle_message(
         FakeEvent(message_id=2, filename="two.mkv", size=5)
     )
+    second_session = service.session
+
+    await service.listeners[0](first_session)
+    await service.listeners[0](second_session)
 
     assert len(client.sent) == 2
-    assert client.edits == []
     assert "Sessione abc123" in client.sent[0][1]
     assert "Sessione def456" in client.sent[1][1]
+    assert [edit[1] for edit in client.edits] == [901, 902]
 
 
 @pytest.mark.asyncio
@@ -278,7 +283,7 @@ async def test_metadata_edit_creates_new_sequential_status_panel() -> None:
     handlers, service, client = _handlers()
     service.session = replace(service.session, state=SessionState.SEALED)
     handlers._editing[10] = "abc123"
-    handlers._status_messages[10] = ("abc123", 20, 700)
+    handlers._status_messages["abc123"] = (20, 700)
 
     await handlers.handle_message(FakeEvent(text="Cape Fear | 2025"))
 
@@ -365,3 +370,15 @@ async def test_confirmed_delete_clears_pending_text_input_for_next_session() -> 
     assert 10 not in handlers._editing
     assert service.calls[-1][0] == "video"
     assert all(message != "Formato non valido. Usa: Titolo | Anno" for _, message, _ in client.sent)
+
+
+@pytest.mark.asyncio
+async def test_confirmed_delete_removes_only_the_selected_session_monitor() -> None:
+    handlers, _, _ = _handlers()
+    handlers._status_messages["abc123"] = (20, 700)
+    handlers._status_messages["def456"] = (20, 701)
+
+    await handlers.handle_callback(FakeEvent(data="delete-confirm:abc123"))
+
+    assert "abc123" not in handlers._status_messages
+    assert handlers._status_messages["def456"] == (20, 701)

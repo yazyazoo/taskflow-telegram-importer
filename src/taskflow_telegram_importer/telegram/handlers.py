@@ -30,7 +30,7 @@ class TelegramHandlers:
         self._extensions = frozenset(value.lower() for value in allowed_extensions)
         self._taskflow_webui_url = taskflow_webui_url
         self._refresh_seconds = refresh_seconds
-        self._status_messages: dict[int, tuple[str, int, int]] = {}
+        self._status_messages: dict[str, tuple[int, int]] = {}
         self._editing: dict[int, tuple[str, str] | str] = {}
         self._terminal_notifications: set[tuple[str, str]] = set()
         service.add_listener(self.session_changed)
@@ -162,7 +162,7 @@ class TelegramHandlers:
                 await self._service.delete_session(session_id, user_id)
                 await event.edit("Sessione eliminata.", buttons=None)
                 self._editing.pop(user_id, None)
-                self._status_messages.pop(user_id, None)
+                self._status_messages.pop(session_id, None)
                 return
             elif action == "show":
                 session = selected
@@ -173,12 +173,12 @@ class TelegramHandlers:
             await self._client.send_message(chat_id, operator_error_message(exc))
 
     async def session_changed(self, session) -> None:
-        current = self._status_messages.get(session.user_id)
-        if current is None or current[0] != session.session_id:
+        current = self._status_messages.get(session.session_id)
+        if current is None:
             return
         rendered = render_session(session, refresh_seconds=self._refresh_seconds)
         await self._client.edit_message(
-            current[1], current[2], rendered.text, buttons=_buttons(rendered)
+            current[0], current[1], rendered.text, buttons=_buttons(rendered)
         )
         await self._notify_terminal_state(session)
 
@@ -200,7 +200,7 @@ class TelegramHandlers:
                 )
                 confirmation = "Titolo e anno aggiornati."
             self._editing.pop(user_id, None)
-            await self._delete_previous_status(user_id)
+            await self._delete_previous_status(session_id)
             await self._client.send_message(chat_id, confirmation)
             await self._show_status(user_id, chat_id, session)
         except ValueError:
@@ -215,12 +215,12 @@ class TelegramHandlers:
             )
             await self._client.send_message(chat_id, message)
 
-    async def _delete_previous_status(self, user_id: int) -> None:
-        current = self._status_messages.pop(user_id, None)
+    async def _delete_previous_status(self, session_id: str) -> None:
+        current = self._status_messages.pop(session_id, None)
         if current is None:
             return
         try:
-            await self._client.delete_messages(current[1], [current[2]])
+            await self._client.delete_messages(current[0], [current[1]])
         except Exception:
             pass
 
@@ -237,19 +237,19 @@ class TelegramHandlers:
             confirm_delete=confirm_delete,
             refresh_seconds=self._refresh_seconds,
         )
-        current = self._status_messages.get(user_id)
-        if current is not None and current[0] == session.session_id:
+        current = self._status_messages.get(session.session_id)
+        if current is not None:
             try:
                 await self._client.edit_message(
-                    current[1], current[2], rendered.text, buttons=_buttons(rendered)
+                    current[0], current[1], rendered.text, buttons=_buttons(rendered)
                 )
                 return
             except Exception:
-                self._status_messages.pop(user_id, None)
+                self._status_messages.pop(session.session_id, None)
         sent = await self._client.send_message(
             chat_id, rendered.text, buttons=_buttons(rendered)
         )
-        self._status_messages[user_id] = (session.session_id, chat_id, int(sent.id))
+        self._status_messages[session.session_id] = (chat_id, int(sent.id))
 
     async def _notify_terminal_state(self, session) -> None:
         failed = tuple(
